@@ -14,7 +14,7 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Facebook Login (User Auth Only)
+    | Facebook Login (User Authentication)
     |--------------------------------------------------------------------------
     */
     'facebook_login' => [
@@ -29,7 +29,7 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | META PLATFORM APP (Master Business)
+    | META PLATFORM APP (Business Platform Level)
     |--------------------------------------------------------------------------
     */
     'meta' => [
@@ -41,14 +41,36 @@ return [
         'graph_version' => env('META_GRAPH_VERSION', 'v19.0'),
         'graph_url'     => env('META_GRAPH_URL', 'https://graph.facebook.com'),
         'oauth_url'     => env('META_OAUTH_URL', 'https://www.facebook.com'),
-         'graph_version' => env('META_GRAPH_VERSION', 'v19.0'),
-    'token' => env('META_SYSTEM_USER_TOKEN'),
-    'ad_account_id' => env('META_AD_ACCOUNT_ID'),
-    'refresh_before_days' => env('META_TOKEN_REFRESH_BEFORE_DAYS', 5),
 
         /*
         |--------------------------------------------------------------------------
-        | Required Permissions
+        | System User Token (for server-side API calls)
+        |--------------------------------------------------------------------------
+        */
+        'token' => env('META_SYSTEM_USER_TOKEN'),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Ads Integration
+        |--------------------------------------------------------------------------
+        */
+        'ad_account_id' => env('META_AD_ACCOUNT_ID'),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Token Lifecycle
+        |--------------------------------------------------------------------------
+        */
+        'refresh_before_days' => (int) env('META_TOKEN_REFRESH_BEFORE_DAYS', 5),
+
+        'long_lived_exchange_url' => env(
+            'META_TOKEN_EXCHANGE_URL',
+            'https://graph.facebook.com/oauth/access_token'
+        ),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Required Meta Permissions
         |--------------------------------------------------------------------------
         */
         'required_permissions' => [
@@ -57,25 +79,14 @@ return [
             'whatsapp_business_management',
             'whatsapp_business_messaging',
         ],
-
-        /*
-        |--------------------------------------------------------------------------
-        | Token Management
-        |--------------------------------------------------------------------------
-        */
-        'token_refresh_before_days' => (int) env('META_TOKEN_REFRESH_BEFORE_DAYS', 5),
-
-        'long_lived_exchange_url' => env(
-            'META_TOKEN_EXCHANGE_URL',
-            'https://graph.facebook.com/oauth/access_token'
-        ),
     ],
 
     /*
     |--------------------------------------------------------------------------
     | WhatsApp Cloud API
     |--------------------------------------------------------------------------
-    | In SaaS mode → token comes from DB (PlatformMetaConnection)
+    | In SaaS mode the access token & phone ID come from DB
+    | (platform_meta_connections table)
     |--------------------------------------------------------------------------
     */
     'whatsapp' => [
@@ -94,6 +105,7 @@ return [
     'whatsapp_webhook' => [
 
         'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
+
         'app_secret'   => env('WHATSAPP_APP_SECRET'),
 
         'signature_header' => env(
@@ -103,12 +115,24 @@ return [
 
         'hash_algo' => 'sha256',
     ],
-    
-'openai' => [
-    'key'   => env('OPENAI_API_KEY'),
-    'model' => env('OPENAI_MODEL', 'gpt-4.1-mini'),
-    'embedding_model' => env('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small'),
-],
+
+    /*
+    |--------------------------------------------------------------------------
+    | OpenAI Configuration
+    |--------------------------------------------------------------------------
+    */
+    'openai' => [
+
+        'key' => env('OPENAI_API_KEY'),
+
+        'model' => env('OPENAI_MODEL', 'gpt-4.1-mini'),
+
+        'embedding_model' => env(
+            'OPENAI_EMBEDDING_MODEL',
+            'text-embedding-3-small'
+        ),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Ads Defaults
@@ -117,6 +141,7 @@ return [
     'ads' => [
 
         'default_currency' => env('ADS_DEFAULT_CURRENCY', 'USD'),
+
         'default_timezone' => env('ADS_DEFAULT_TIMEZONE', 'UTC'),
 
         'default_objective' => env(
@@ -124,8 +149,8 @@ return [
             'OUTCOME_TRAFFIC'
         ),
 
-        'min_daily_budget'     => (int) env('ADS_MIN_DAILY_BUDGET', 100),
-        'min_lifetime_budget'  => (int) env('ADS_MIN_LIFETIME_BUDGET', 1000),
+        'min_daily_budget'    => (int) env('ADS_MIN_DAILY_BUDGET', 100),
+        'min_lifetime_budget' => (int) env('ADS_MIN_LIFETIME_BUDGET', 1000),
     ],
 
 ];
