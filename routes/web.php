@@ -12,6 +12,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\Auth\FacebookAuthController;
 use App\Http\Controllers\Admin\FaqController;
 use App\Http\Controllers\Admin\InboxController;
+use App\Http\Controllers\Webhooks\MetaWebhookController;
 
 /* ================= CLIENT CONTROLLERS ================= */
 use App\Http\Controllers\Client\{
@@ -246,7 +247,16 @@ Route::middleware(['auth', 'verified', 'role:admin'])
             ->name('settings.index');
     });
 
+/*
+|--------------------------------------------------------------------------
+| META WEBHOOK
+|--------------------------------------------------------------------------
+*/
 
+Route::prefix('webhook/meta')->group(function () {
+    Route::get('/', [MetaWebhookController::class, 'verify']);
+    Route::post('/', [MetaWebhookController::class, 'handle']);
+});
 /*
 |--------------------------------------------------------------------------
 | USER PROFILE
