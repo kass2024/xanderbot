@@ -52,10 +52,10 @@ class MetaWebhookController extends Controller
     */
     public function handle(Request $request): Response
     {
-        // if (!$this->isValidSignature($request)) {
-        //     Log::warning('Invalid Meta webhook signature');
-        //     return response()->json(['error' => 'Unauthorized'], 403);
-        // }
+        if (!$this->isValidSignature($request)) {
+            Log::warning('Invalid Meta webhook signature');
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
 
         $payload = $request->json()->all();
 
