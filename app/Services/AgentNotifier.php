@@ -1,0 +1,219 @@
+<?php
+
+namespace App\Services;
+
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use App\Models\Conversation;
+use App\Models\User;
+
+class AgentNotifier
+{
+
+    /**
+     * Send WhatsApp template notification to agent
+     */
+    public function notifyAgent(User $agent, Conversation $conversation): bool
+    {
+
+        try {
+
+            /*
+            |--------------------------------------------------------------------------
+            | Load configuration
+            |--------------------------------------------------------------------------
+            */
+
+            $phoneNumberId = config('services.whatsapp.phone_number_id');
+            $accessToken   = config('services.whatsapp.access_token');
+
+            if (!$phoneNumberId || !$accessToken) {
+
+                Log::error('AGENT_NOTIFICATION_CONFIG_MISSING', [
+                    'phone_number_id' => $phoneNumberId,
+                    'token_present' => !empty($accessToken)
+                ]);
+
+                return false;
+            }
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Validate agent phone
+            |--------------------------------------------------------------------------
+            */
+
+            if (empty($agent->whatsapp_number)) {
+
+                Log::warning('AGENT_NOTIFICATION_NO_PHONE', [
+                    'agent_id' => $agent->id,
+                    'agent_name' => $agent->name
+                ]);
+
+                return false;
+            }
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Normalize phone numbers
+            |--------------------------------------------------------------------------
+            */
+
+            $agentPhone    = preg_replace('/[^0-9]/', '', $agent->whatsapp_number);
+            $customerPhone = preg_replace('/[^0-9]/', '', $conversation->phone_number);
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Customer information
+            |--------------------------------------------------------------------------
+            */
+
+            $customerName  = $conversation->customer_name ?: 'Customer';
+            $customerEmail = $conversation->customer_email ?: 'Not provided';
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Clickable WhatsApp phone link
+            |--------------------------------------------------------------------------
+            */
+
+            $phoneLink = "https://wa.me/{$customerPhone}";
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Dashboard conversation link
+            |--------------------------------------------------------------------------
+            */
+
+            $dashboardLink = config('app.url') . "/admin/inbox?conversation=" . $conversation->id;
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Logging start
+            |--------------------------------------------------------------------------
+            */
+
+            Log::info('AGENT_NOTIFICATION_START', [
+                'agent_id'        => $agent->id,
+                'agent_name'      => $agent->name,
+                'agent_phone'     => $agentPhone,
+                'customer_name'   => $customerName,
+                'customer_email'  => $customerEmail,
+                'customer_phone'  => $customerPhone,
+                'conversation_id' => $conversation->id
+            ]);
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Send WhatsApp Template
+            |--------------------------------------------------------------------------
+            */
+
+            $response = Http::withToken($accessToken)
+                ->timeout(20)
+                ->retry(2, 500)
+                ->post(
+                    "https://graph.facebook.com/v19.0/{$phoneNumberId}/messages",
+                    [
+
+                        "messaging_product" => "whatsapp",
+
+                        "to" => $agentPhone,
+
+                        "type" => "template",
+
+                        "template" => [
+
+                            "name" => "agent_support_alert",
+
+                            "language" => [
+                                "code" => "en"
+                            ],
+
+                            "components" => [
+                                [
+                                    "type" => "body",
+                                    "parameters" => [
+
+                                        [
+                                            "type" => "text",
+                                            "text" => $customerName
+                                        ],
+
+                                        [
+                                            "type" => "text",
+                                            "text" => $customerEmail
+                                        ],
+
+                                        [
+                                            "type" => "text",
+                                            "text" => $phoneLink
+                                        ],
+
+                                        [
+                                            "type" => "text",
+                                            "text" => $dashboardLink
+                                        ]
+
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+                );
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Handle Meta response
+            |--------------------------------------------------------------------------
+            */
+
+            if ($response->failed()) {
+
+                Log::error('AGENT_NOTIFICATION_META_ERROR', [
+
+                    'agent_id' => $agent->id,
+                    'agent_phone' => $agentPhone,
+                    'status' => $response->status(),
+                    'response' => $response->body()
+
+                ]);
+
+                return false;
+            }
+
+
+            Log::info('AGENT_NOTIFICATION_SENT', [
+
+                'agent_id'        => $agent->id,
+                'agent_name'      => $agent->name,
+                'agent_phone'     => $agentPhone,
+                'conversation_id' => $conversation->id,
+                'meta_response'   => $response->json()
+
+            ]);
+
+            return true;
+
+        } catch (\Throwable $e) {
+
+            Log::error('AGENT_NOTIFICATION_EXCEPTION', [
+
+                'agent_id'        => $agent->id ?? null,
+                'conversation_id' => $conversation->id ?? null,
+                'error'           => $e->getMessage()
+
+            ]);
+
+            return false;
+        }
+    }
+}
