@@ -4,7 +4,6 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Http;
 use Carbon\Carbon;
 
 use App\Services\MetaAdsService;
@@ -16,9 +15,13 @@ use App\Models\Ad;
 class SyncMetaAds extends Command
 {
     protected $signature = 'meta:sync-ads';
-    protected $description = 'Meta sync with batch insights + budget enforcement';
+    protected $description = 'Meta sync with batch insights + smart rate limiting';
 
     protected MetaAdsService $meta;
+
+    // 🔥 GLOBAL THROTTLE SETTINGS
+    protected int $delayBetweenCalls = 300000; // 0.3 sec
+    protected int $maxRetries = 3;
 
     public function __construct(MetaAdsService $meta)
     {
@@ -46,7 +49,9 @@ class SyncMetaAds extends Command
             | 1️⃣ CAMPAIGNS
             |----------------------------------------------------------
             */
-            $campaigns = $this->meta->getCampaigns($accountId);
+            $campaigns = $this->safeMetaCall(fn() =>
+                $this->meta->getCampaigns($accountId)
+            );
 
             foreach ($campaigns['data'] ?? [] as $c) {
 
@@ -68,7 +73,9 @@ class SyncMetaAds extends Command
             | 2️⃣ ADSETS
             |----------------------------------------------------------
             */
-            $metaAdsets = $this->meta->getAdSets($accountId);
+            $metaAdsets = $this->safeMetaCall(fn() =>
+                $this->meta->getAdSets($accountId)
+            );
 
             foreach ($metaAdsets['data'] ?? [] as $a) {
 
@@ -90,20 +97,25 @@ class SyncMetaAds extends Command
                 );
             }
 
+            $adsetMap = AdSet::pluck('id', 'meta_id');
+
             /*
             |----------------------------------------------------------
             | 3️⃣ ADS
             |----------------------------------------------------------
             */
-            $adsetMap = AdSet::pluck('id', 'meta_id');
-            $metaAds = $this->meta->getAds($accountId);
+            $metaAds = $this->safeMetaCall(fn() =>
+                $this->meta->getAds($accountId)
+            );
 
             /*
             |----------------------------------------------------------
-            | 🔥 4️⃣ BATCH INSIGHTS (CRITICAL FIX)
+            | 4️⃣ BATCH INSIGHTS (ONE CALL ONLY ✅)
             |----------------------------------------------------------
             */
-            $insights = $this->meta->getInsightsBatch($accountId);
+            $insights = $this->safeMetaCall(fn() =>
+                $this->meta->getInsightsBatch($accountId)
+            );
 
             $insightMap = collect($insights['data'] ?? [])
                 ->keyBy('ad_id');
@@ -126,11 +138,6 @@ class SyncMetaAds extends Command
                         ]
                     );
 
-                    /*
-                    |--------------------------------------------------
-                    | GET INSIGHT FROM BATCH
-                    |--------------------------------------------------
-                    */
                     $insight = $insightMap[$metaAdId] ?? [];
 
                     $todaySpend = (float)($insight['spend'] ?? 0);
@@ -143,35 +150,25 @@ class SyncMetaAds extends Command
 
                     /*
                     |--------------------------------------------------
-                    | 🔥 BUDGET GUARD
+                    | 🔥 SMART BUDGET CONTROL
                     |--------------------------------------------------
                     */
                     $status = $ad->status;
                     $pauseReason = $ad->pause_reason;
 
-                    Log::info('BUDGET_CHECK', [
-                        'ad' => $metaAdId,
-                        'spend' => $todaySpend,
-                        'budget' => $ad->daily_budget,
-                        'status' => $status
-                    ]);
-
                     if ($ad->daily_budget) {
 
-                        // 🔴 PAUSE
                         if ($todaySpend >= $ad->daily_budget) {
 
-                            if ($ad->pause_reason !== 'budget') {
+                            if ($pauseReason !== 'budget') {
 
-                                Log::warning('AUTO_PAUSE', [
-                                    'ad' => $metaAdId
-                                ]);
+                                Log::warning('AUTO_PAUSE', ['ad' => $metaAdId]);
 
-                                $this->safeMetaCall(function () use ($metaAdId) {
-                                    return $this->meta->updateAd($metaAdId, [
+                                $this->safeMetaCall(fn() =>
+                                    $this->meta->updateAd($metaAdId, [
                                         'status' => 'PAUSED'
-                                    ]);
-                                });
+                                    ])
+                                );
 
                                 $status = 'PAUSED';
                                 $pauseReason = 'budget';
@@ -179,18 +176,15 @@ class SyncMetaAds extends Command
 
                         } else {
 
-                            // 🟢 RESUME
-                            if ($ad->pause_reason === 'budget') {
+                            if ($pauseReason === 'budget') {
 
-                                Log::info('AUTO_RESUME', [
-                                    'ad' => $metaAdId
-                                ]);
+                                Log::info('AUTO_RESUME', ['ad' => $metaAdId]);
 
-                                $this->safeMetaCall(function () use ($metaAdId) {
-                                    return $this->meta->updateAd($metaAdId, [
+                                $this->safeMetaCall(fn() =>
+                                    $this->meta->updateAd($metaAdId, [
                                         'status' => 'ACTIVE'
-                                    ]);
-                                });
+                                    ])
+                                );
 
                                 $status = 'ACTIVE';
                                 $pauseReason = null;
@@ -206,11 +200,9 @@ class SyncMetaAds extends Command
                     $ad->update([
                         'status' => $status,
                         'pause_reason' => $pauseReason,
-
                         'impressions' => $impressions,
                         'clicks' => $clicks,
                         'ctr' => $ctr,
-
                         'daily_spend' => $todaySpend,
                         'spend_date' => Carbon::today()->toDateString()
                     ]);
@@ -223,12 +215,11 @@ class SyncMetaAds extends Command
                     ]);
                 }
 
-                // 🔒 Throttle (Meta safe)
-                usleep(200000);
+                // 🔒 GLOBAL THROTTLE
+                usleep($this->delayBetweenCalls);
             }
 
             $this->info('✅ Sync completed successfully');
-
             return Command::SUCCESS;
 
         } catch (\Throwable $e) {
@@ -238,29 +229,45 @@ class SyncMetaAds extends Command
             ]);
 
             $this->error($e->getMessage());
-
             return Command::FAILURE;
         }
     }
 
     /*
     |--------------------------------------------------------------
-    | 🔥 SAFE META CALL (RATE LIMIT PROTECTION)
+    | 🔥 SAFE META CALL WITH RETRY + BACKOFF
     |--------------------------------------------------------------
     */
     private function safeMetaCall(callable $callback)
     {
+        $attempt = 0;
+
+        start:
+
         try {
             return $callback();
 
         } catch (\Throwable $e) {
 
-            if (str_contains($e->getMessage(), 'limit')) {
+            $attempt++;
 
-                Log::warning('RATE_LIMIT_HIT - RETRYING...');
-                sleep(2);
+            $message = $e->getMessage();
 
-                return $callback();
+            // 🔴 RATE LIMIT HANDLING
+            if (str_contains($message, 'limit') || str_contains($message, 'code":17')) {
+
+                if ($attempt <= $this->maxRetries) {
+
+                    $delay = pow(2, $attempt); // exponential backoff
+
+                    Log::warning("RATE LIMIT HIT - RETRY {$attempt} in {$delay}s");
+
+                    sleep($delay);
+
+                    goto start;
+                }
+
+                Log::error('MAX RETRIES REACHED (RATE LIMIT)');
             }
 
             throw $e;
