@@ -4,7 +4,7 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Agent Routing Priority
+    | Agent Routing Priority fixed 
     |--------------------------------------------------------------------------
     | Order of agents for escalation (level 1 → level 2 → ...)
     */
