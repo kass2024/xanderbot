@@ -16,25 +16,30 @@ class Kernel extends ConsoleKernel
 
         /*
         |--------------------------------------------------------------------------
-        | META ADS SYNC (FAST, SAFE)
+        | META ADS SYNC (PRIMARY - CRITICAL)
         |--------------------------------------------------------------------------
+        | Syncs ad spend, impressions, clicks
+        | MUST RUN correctly or dashboard freezes
         */
         $schedule->command('meta:sync-ads')
             ->everyMinute()
-            ->withoutOverlapping(10) // 🔥 reduced lock time
+            ->withoutOverlapping(10)
             ->runInBackground()
-            ->name('meta-sync')
+            ->name('meta-sync-ads')
             ->appendOutputTo(storage_path('logs/meta-sync.log'));
 
 
         /*
         |--------------------------------------------------------------------------
-        | 🔥 BUDGET RESET (CRITICAL FIXED)
+        | BUDGET RESET + AUTO RESUME
         |--------------------------------------------------------------------------
+        | Handles:
+        | - Daily reset
+        | - Resume ads (excluding manual pause)
         */
         $schedule->command('ads:reset-daily-budget')
             ->everyMinute()
-            ->withoutOverlapping(10) // 🔥 FIX: was blocking for 120s
+            ->withoutOverlapping(10)
             ->runInBackground()
             ->name('ads-budget-reset')
             ->appendOutputTo(storage_path('logs/ad-reset.log'))
@@ -58,15 +63,11 @@ class Kernel extends ConsoleKernel
 
         /*
         |--------------------------------------------------------------------------
-        | META MARKETING ENGINE
+        | 🚫 REMOVED BROKEN COMMAND
         |--------------------------------------------------------------------------
+        | meta:sync ❌ (was ambiguous and breaking sync)
+        | DO NOT ADD BACK unless explicitly implemented
         */
-        $schedule->command('meta:sync')
-            ->everyThirtyMinutes()
-            ->withoutOverlapping(10)
-            ->runInBackground()
-            ->name('meta-sync-engine')
-            ->appendOutputTo(storage_path('logs/meta-sync.log'));
 
 
         /*
@@ -84,14 +85,15 @@ class Kernel extends ConsoleKernel
 
         /*
         |--------------------------------------------------------------------------
-        | QUEUE WORKER (IMPORTANT NOTE BELOW)
+        | QUEUE WORKER (PRODUCTION NOTE BELOW)
         |--------------------------------------------------------------------------
+        | ⚠️ In production, prefer Supervisor instead of scheduler
         */
         $schedule->command('queue:work --tries=3 --timeout=90')
             ->everyMinute()
             ->runInBackground()
             ->withoutOverlapping(10)
-            ->name('chatbot-queue-worker')
+            ->name('queue-worker')
             ->appendOutputTo(storage_path('logs/queue-worker.log'));
 
 
