@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
+use Carbon\Carbon;
 
 use App\Services\MetaAdsService;
 use App\Models\AdAccount;
@@ -15,7 +16,7 @@ class SyncMetaAds extends Command
 {
     protected $signature = 'meta:sync-ads';
 
-    protected $description = 'Synchronize Meta campaigns, adsets, ads and performance metrics';
+    protected $description = 'Synchronize Meta campaigns, adsets, ads and enforce budget logic';
 
     protected MetaAdsService $meta;
 
@@ -27,25 +28,24 @@ class SyncMetaAds extends Command
 
     public function handle()
     {
-        $this->info('Starting Meta Ads Sync...');
+        $this->info('🚀 Starting Meta Ads Sync...');
 
         try {
 
             $account = AdAccount::first();
 
             if (!$account) {
-                $this->error('No Meta Ad Account connected.');
+                $this->error('❌ No Meta Ad Account connected.');
                 return Command::FAILURE;
             }
 
             $accountId = $account->meta_id;
 
             /*
-            |--------------------------------------------------------------------------
-            | Campaign Sync
-            |--------------------------------------------------------------------------
+            |------------------------------------------------------------------
+            | 1️⃣ CAMPAIGNS
+            |------------------------------------------------------------------
             */
-
             $campaigns = $this->meta->getCampaigns($accountId);
 
             foreach ($campaigns['data'] ?? [] as $metaCampaign) {
@@ -61,20 +61,18 @@ class SyncMetaAds extends Command
                 );
             }
 
-            $campaignMap = Campaign::pluck('id','meta_id');
+            $campaignMap = Campaign::pluck('id', 'meta_id');
 
             /*
-            |--------------------------------------------------------------------------
-            | AdSet Sync
-            |--------------------------------------------------------------------------
+            |------------------------------------------------------------------
+            | 2️⃣ ADSETS
+            |------------------------------------------------------------------
             */
-
             $metaAdsets = $this->meta->getAdSets($accountId);
 
             foreach ($metaAdsets['data'] ?? [] as $metaAdset) {
 
                 $campaignId = $campaignMap[$metaAdset['campaign_id']] ?? null;
-
                 if (!$campaignId) continue;
 
                 $budget = isset($metaAdset['daily_budget'])
@@ -82,122 +80,155 @@ class SyncMetaAds extends Command
                     : null;
 
                 AdSet::updateOrCreate(
-                    ['meta_id'=>$metaAdset['id']],
+                    ['meta_id' => $metaAdset['id']],
                     [
-                        'campaign_id'=>$campaignId,
-                        'name'=>$metaAdset['name'],
-                        'status'=>$metaAdset['status'],
-                        'daily_budget'=>$budget
+                        'campaign_id' => $campaignId,
+                        'name' => $metaAdset['name'],
+                        'status' => $metaAdset['status'],
+                        'daily_budget' => $budget
                     ]
                 );
             }
 
             /*
-            |--------------------------------------------------------------------------
-            | Ads Sync
-            |--------------------------------------------------------------------------
+            |------------------------------------------------------------------
+            | 3️⃣ ADS
+            |------------------------------------------------------------------
             */
-
-            $adsetMap = AdSet::pluck('id','meta_id');
+            $adsetMap = AdSet::pluck('id', 'meta_id');
 
             $metaAds = $this->meta->getAds($accountId);
 
             foreach ($metaAds['data'] ?? [] as $metaAd) {
 
-                $metaAdId = $metaAd['id'];
-                $adsetId = $adsetMap[$metaAd['adset_id']] ?? null;
+                try {
 
-                if (!$adsetId) continue;
+                    $metaAdId = $metaAd['id'];
+                    $adsetId = $adsetMap[$metaAd['adset_id']] ?? null;
 
-                $ad = Ad::updateOrCreate(
-                    ['meta_ad_id'=>$metaAdId],
-                    [
-                        'adset_id'=>$adsetId,
-                        'name'=>$metaAd['name'],
-                        'status'=>$metaAd['status']
-                    ]
-                );
+                    if (!$adsetId) continue;
 
-                /*
-                |--------------------------------------------------------------------------
-                | Insights
-                |--------------------------------------------------------------------------
-                */
+                    /*
+                    |----------------------------------------------------------
+                    | CREATE / GET AD (DO NOT TRUST META STATUS)
+                    |----------------------------------------------------------
+                    */
+                    $ad = Ad::firstOrCreate(
+                        ['meta_ad_id' => $metaAdId],
+                        [
+                            'adset_id' => $adsetId,
+                            'name' => $metaAd['name'],
+                            'status' => 'ACTIVE'
+                        ]
+                    );
 
-                $lifetime = $this->meta->getInsights($metaAdId,'maximum');
-                $today = $this->meta->getInsights($metaAdId,'today');
+                    /*
+                    |----------------------------------------------------------
+                    | INSIGHTS
+                    |----------------------------------------------------------
+                    */
+                    $lifetime = $this->meta->getInsights($metaAdId, 'maximum');
+                    $today    = $this->meta->getInsights($metaAdId, 'today');
 
-                $impressions = $lifetime['impressions'] ?? 0;
-                $clicks = $lifetime['clicks'] ?? 0;
-                $lifetimeSpend = $lifetime['spend'] ?? 0;
-                $todaySpend = $today['spend'] ?? 0;
+                    $impressions = (int)($lifetime['impressions'] ?? 0);
+                    $clicks      = (int)($lifetime['clicks'] ?? 0);
+                    $lifetimeSpend = (float)($lifetime['spend'] ?? 0);
+                    $todaySpend    = (float)($today['spend'] ?? 0);
 
-                $ctr = $impressions > 0
-                    ? round(($clicks/$impressions)*100,2)
-                    : 0;
+                    $ctr = $impressions > 0
+                        ? round(($clicks / $impressions) * 100, 2)
+                        : 0;
 
-                /*
-                |--------------------------------------------------------------------------
-                | Budget Guard
-                |--------------------------------------------------------------------------
-                */
-
-                $status = $metaAd['status'];
-
-                if (
-                    $ad->daily_budget &&
-                    $todaySpend >= $ad->daily_budget &&
-                    $status !== 'PAUSED'
-                ) {
-
-                    Log::warning('AUTO_PAUSING_AD',[
-                        'ad'=>$metaAdId,
-                        'today_spend'=>$todaySpend,
-                        'budget'=>$ad->daily_budget
-                    ]);
-
-                    $this->meta->updateAd($metaAdId,[
-                        'status'=>'PAUSED'
-                    ]);
-
-                    $status = 'PAUSED';
-
-                    $pauseReason = 'budget_limit';
-
-                } else {
-
+                    /*
+                    |----------------------------------------------------------
+                    | 🔥 BUDGET GUARD (CORE LOGIC)
+                    |----------------------------------------------------------
+                    */
+                    $status = $ad->status;
                     $pauseReason = $ad->pause_reason;
+
+                    Log::info('BUDGET_CHECK', [
+                        'ad_id' => $metaAdId,
+                        'spend' => $todaySpend,
+                        'budget' => $ad->daily_budget,
+                        'status' => $status
+                    ]);
+
+                    if ($ad->daily_budget) {
+
+                        // 🔴 PAUSE
+                        if ($todaySpend >= $ad->daily_budget) {
+
+                            if ($ad->pause_reason !== 'budget') {
+
+                                Log::warning('AUTO_PAUSING_AD', [
+                                    'ad' => $metaAdId,
+                                    'spend' => $todaySpend,
+                                    'budget' => $ad->daily_budget
+                                ]);
+
+                                $this->meta->updateAd($metaAdId, [
+                                    'status' => 'PAUSED'
+                                ]);
+
+                                $status = 'PAUSED';
+                                $pauseReason = 'budget';
+                            }
+
+                        } else {
+
+                            // 🟢 RESUME ONLY IF paused by budget
+                            if ($ad->pause_reason === 'budget') {
+
+                                Log::info('AUTO_RESUMING_AD', [
+                                    'ad' => $metaAdId
+                                ]);
+
+                                $this->meta->updateAd($metaAdId, [
+                                    'status' => 'ACTIVE'
+                                ]);
+
+                                $status = 'ACTIVE';
+                                $pauseReason = null;
+                            }
+                        }
+                    }
+
+                    /*
+                    |----------------------------------------------------------
+                    | SAVE EVERYTHING
+                    |----------------------------------------------------------
+                    */
+                    $ad->update([
+                        'status' => $status,
+                        'pause_reason' => $pauseReason,
+
+                        'impressions' => $impressions,
+                        'clicks' => $clicks,
+                        'ctr' => $ctr,
+
+                        'spend' => $lifetimeSpend,
+                        'daily_spend' => $todaySpend,
+                        'spend_date' => Carbon::today()->toDateString()
+                    ]);
+
+                } catch (\Throwable $e) {
+
+                    Log::error('AD_SYNC_FAILED', [
+                        'ad_id' => $metaAd['id'] ?? null,
+                        'error' => $e->getMessage()
+                    ]);
                 }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Save Metrics
-                |--------------------------------------------------------------------------
-                */
-
-                $ad->update([
-
-                    'status'=>$status,
-                    'pause_reason'=>$pauseReason,
-
-                    'impressions'=>$impressions,
-                    'clicks'=>$clicks,
-                    'ctr'=>$ctr,
-
-                    'spend'=>$lifetimeSpend,
-                    'daily_spend'=>$todaySpend,
-                    'spend_date'=>now()->toDateString()
-                ]);
             }
 
-            $this->info('Sync complete.');
+            $this->info('✅ Sync complete.');
 
             return Command::SUCCESS;
 
         } catch (\Throwable $e) {
 
-            Log::error('META_SYNC_FAILED',[
-                'error'=>$e->getMessage()
+            Log::error('META_SYNC_FATAL', [
+                'error' => $e->getMessage()
             ]);
 
             $this->error($e->getMessage());
