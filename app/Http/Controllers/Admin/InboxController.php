@@ -199,9 +199,16 @@ class InboxController extends Controller
 
             $mime = (string) $file->getMimeType();
 
+            /*
+             * Browsers record mic voice as video/webm (Opus in WebM). Treat as audio so we ffmpeg→OGG/MP3,
+             * WhatsApp gets type=audio, and the inbox UI uses <audio> instead of a broken <video> preview.
+             */
+            $isBrowserVoiceWebm = $mime === 'video/webm'
+                || ($mime === 'application/octet-stream' && str_ends_with(strtolower($file->getClientOriginalName()), '.webm'));
+
             if (str_contains($mime, 'image')) {
                 $mediaType = 'image';
-            } elseif (str_starts_with($mime, 'audio/')) {
+            } elseif (str_starts_with($mime, 'audio/') || $isBrowserVoiceWebm) {
                 $mediaType = 'audio';
                 $absolute = Storage::disk('public')->path($path);
                 $convertedAbs = app(WhatsAppAudioConverter::class)->toWhatsAppFormat($absolute);
@@ -215,6 +222,7 @@ class InboxController extends Controller
                 Log::channel('voice')->info('Admin inbox audio file prepared', [
                     'conversation_id' => $conversation->id,
                     'mime' => $mime,
+                    'voice_webm' => $isBrowserVoiceWebm,
                     'stored_path' => $path,
                 ]);
             } elseif (str_starts_with($mime, 'video/')) {

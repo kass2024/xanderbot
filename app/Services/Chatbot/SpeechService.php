@@ -15,28 +15,38 @@ class SpeechService
     {
         $key = config('services.openai.key');
         if (! $key || ! is_readable($absolutePath)) {
+            Log::channel('voice')->warning('Whisper: missing API key or unreadable file', [
+                'path' => $absolutePath,
+                'filename' => $originalFilename,
+            ]);
+
             return null;
         }
 
         try {
-            $handle = fopen($absolutePath, 'rb');
-            if ($handle === false) {
+            $contents = file_get_contents($absolutePath);
+            if ($contents === false || $contents === '') {
+                Log::channel('voice')->warning('Whisper: empty or unread file', [
+                    'filename' => $originalFilename,
+                ]);
+
                 return null;
             }
 
             $response = Http::withToken($key)
                 ->timeout($this->timeout)
-                ->attach('file', $handle, $originalFilename)
+                ->attach('file', $contents, $originalFilename)
                 ->post('https://api.openai.com/v1/audio/transcriptions', [
                     'model' => 'whisper-1',
                 ]);
 
-            if (is_resource($handle)) {
-                fclose($handle);
-            }
-
             if ($response->failed()) {
                 Log::warning('Whisper transcription failed', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+                Log::channel('voice')->warning('Whisper API error', [
+                    'filename' => $originalFilename,
                     'status' => $response->status(),
                     'body' => $response->body(),
                 ]);
@@ -49,6 +59,10 @@ class SpeechService
             return $text !== '' ? $text : null;
         } catch (\Throwable $e) {
             Log::error('Whisper exception', ['error' => $e->getMessage()]);
+            Log::channel('voice')->error('Whisper exception', [
+                'filename' => $originalFilename,
+                'error' => $e->getMessage(),
+            ]);
 
             return null;
         }
@@ -89,7 +103,7 @@ class SpeechService
                 return null;
             }
 
-            $path = 'tts/'.Str::uuid()->'.mp3';
+            $path = 'tts/'.Str::uuid().'.mp3';
             Storage::disk('public')->put($path, $response->body());
 
             return $path;

@@ -9,6 +9,7 @@ use App\Models\PlatformMetaConnection;
 use App\Services\Chatbot\ChatbotProcessor;
 use App\Services\Chatbot\MessageDispatcher;
 use App\Services\Chatbot\SpeechService;
+use App\Services\WhatsAppAudioConverter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -357,6 +358,7 @@ class MetaWebhookController extends Controller
         $token = $this->dispatcher->accessTokenForPlatform($platform);
         if (! $token) {
             Log::warning('No access token for media download', ['platform_id' => $platform->id]);
+            Log::channel('voice')->warning('Inbound transcribe: no platform access token', ['platform_id' => $platform->id]);
 
             return null;
         }
@@ -374,6 +376,11 @@ class MetaWebhookController extends Controller
                     'status' => $metaResponse->status(),
                     'body' => $metaResponse->body(),
                 ]);
+                Log::channel('voice')->warning('Inbound transcribe: media meta HTTP failed', [
+                    'media_id' => $mediaId,
+                    'status' => $metaResponse->status(),
+                    'body' => $metaResponse->body(),
+                ]);
 
                 return null;
             }
@@ -382,6 +389,10 @@ class MetaWebhookController extends Controller
             $mediaUrl = $metaResponse->json('url');
             if (! $mediaUrl) {
                 Log::warning('WhatsApp media meta missing url', ['json' => $metaResponse->json()]);
+                Log::channel('voice')->warning('Inbound transcribe: media meta missing url', [
+                    'media_id' => $mediaId,
+                    'json' => $metaResponse->json(),
+                ]);
 
                 return null;
             }
@@ -393,7 +404,8 @@ class MetaWebhookController extends Controller
                 str_contains($mime, 'mp4') || str_contains($mime, 'm4a') || str_contains($mime, 'aac') => 'm4a',
                 str_contains($mime, 'webm') => 'webm',
                 str_contains($mime, 'wav') => 'wav',
-                default => 'ogg',
+                str_contains($mime, 'amr') => 'amr',
+                default => 'bin',
             };
 
             $binary = Http::withToken($token)
@@ -402,23 +414,59 @@ class MetaWebhookController extends Controller
 
             if ($binary->failed()) {
                 Log::warning('WhatsApp media binary download failed', ['status' => $binary->status()]);
+                Log::channel('voice')->warning('Inbound transcribe: binary download failed', [
+                    'media_id' => $mediaId,
+                    'status' => $binary->status(),
+                ]);
 
                 return null;
             }
 
             $tmp = sys_get_temp_dir().'/wa_audio_'.uniqid('', true).'.'.$ext;
             if (file_put_contents($tmp, $binary->body()) === false) {
+                Log::channel('voice')->warning('Inbound transcribe: could not write temp file', ['media_id' => $mediaId]);
+
                 return null;
             }
 
+            $bytes = @filesize($tmp) ?: 0;
+            Log::channel('voice')->info('Inbound transcribe: downloaded', [
+                'media_id' => $mediaId,
+                'mime' => $mime,
+                'ext' => $ext,
+                'bytes' => $bytes,
+            ]);
+
             $uploadName = 'voice.'.$ext;
-            $text = app(SpeechService::class)->transcribeFile($tmp, $uploadName);
+            $speech = app(SpeechService::class);
+            $text = $speech->transcribeFile($tmp, $uploadName);
+
+            if (($text === null || $text === '') && $bytes > 0) {
+                $converted = app(WhatsAppAudioConverter::class)->toWhatsAppFormat($tmp);
+                if ($converted && is_file($converted)) {
+                    Log::channel('voice')->info('Inbound transcribe: retrying Whisper after ffmpeg normalize', [
+                        'media_id' => $mediaId,
+                        'converted' => basename($converted),
+                    ]);
+                    $text = $speech->transcribeFile($converted, basename($converted));
+                    @unlink($converted);
+                } else {
+                    Log::channel('voice')->warning('Inbound transcribe: ffmpeg normalize skipped or failed', [
+                        'media_id' => $mediaId,
+                        'mime' => $mime,
+                    ]);
+                }
+            }
 
             @unlink($tmp);
 
             return $text;
         } catch (\Throwable $e) {
             Log::error('Audio transcription pipeline failed', ['error' => $e->getMessage()]);
+            Log::channel('voice')->error('Inbound transcribe: exception', [
+                'media_id' => $mediaId,
+                'error' => $e->getMessage(),
+            ]);
 
             return null;
         }

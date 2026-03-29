@@ -23,11 +23,12 @@ return [
     |--------------------------------------------------------------------------
     | Which AIEngine "source" values may attach TTS audio (when voice_faq_replies is true)
     |--------------------------------------------------------------------------
-    | Comma-separated. Include grounded_ai,ai so non-cache answers still get voice when enabled.
+    | Comma-separated. Include grounded_ai, ai, pure_ai, greeting so all AIEngine paths can attach TTS when enabled.
+    | If you set CHATBOT_VOICE_SOURCES in .env, add pure_ai (and any other sources you use) or TTS will be skipped.
     */
     'voice_reply_sources' => array_values(array_filter(array_map('trim', explode(',', env(
         'CHATBOT_VOICE_SOURCES',
-        'direct_match,similar_question,keyword_match,faq_token_overlap,semantic_match,grounded_ai,ai'
+        'direct_match,similar_question,keyword_match,faq_token_overlap,semantic_match,grounded_ai,ai,pure_ai,greeting'
     ))))),
 
 ];
