@@ -143,11 +143,37 @@
             </div>
 
             <div class="inbox-composer border-t p-2 sm:p-3">
+                <div id="composer-draft" class="mx-auto mb-2 hidden max-w-3xl rounded-xl border border-dashed px-3 py-2 inbox-draft-strip">
+                    <div class="flex items-center gap-2">
+                        <span id="draft-icon" class="text-xl" aria-hidden="true">📎</span>
+                        <div class="min-w-0 flex-1">
+                            <p id="draft-label" class="text-xs font-semibold uppercase tracking-wide opacity-70">Ready to send</p>
+                            <p id="draft-name" class="truncate text-sm font-medium"></p>
+                        </div>
+                        <span id="draft-meta" class="shrink-0 text-xs opacity-70"></span>
+                        <button type="button" id="draft-clear" class="shrink-0 rounded-lg px-2 py-1 text-xs font-bold text-red-600 hover:bg-red-500/10">Remove</button>
+                    </div>
+                </div>
+
+                <div id="record-panel" class="mx-auto mb-2 hidden max-w-3xl rounded-xl border border-red-500/40 bg-red-600/10 px-3 py-2.5">
+                    <div class="mb-2 flex items-center justify-between gap-2">
+                        <span class="flex items-center gap-2 text-sm font-semibold text-red-800 dark:text-red-200">
+                            <span class="inbox-rec-dot h-2.5 w-2.5 shrink-0 rounded-full bg-red-500"></span>
+                            Recording <span id="record-timer" class="tabular-nums">0:00</span>
+                        </span>
+                        <button type="button" id="record-stop-btn" class="rounded-lg bg-red-600 px-3 py-1 text-xs font-bold text-white hover:bg-red-700">Stop</button>
+                    </div>
+                    <div class="h-2 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                        <div id="record-progress-fill" class="h-full rounded-full bg-red-500 transition-[width] duration-100 ease-linear" style="width:0%"></div>
+                    </div>
+                    <p class="mt-1.5 text-[10px] opacity-80">Hold the mic, or click Stop when done — then press <strong>Send</strong>.</p>
+                </div>
+
                 <form id="reply-form" method="POST" action="{{ route('admin.inbox.reply', $activeConversation) }}" enctype="multipart/form-data" class="mx-auto flex max-w-3xl items-end gap-2">
                     @csrf
                     <input type="file" id="attachment-input" name="attachment" accept="image/*,video/mp4,video/quicktime,.mp4,.mov,.3gp,audio/*,.mp3,.m4a,.ogg,.opus,.webm,application/pdf,.doc,.docx" class="hidden">
 
-                    <button type="button" onclick="document.getElementById('attachment-input').click()"
+                    <button type="button" id="attach-btn" onclick="document.getElementById('attachment-input').click()"
                             class="inbox-composer-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-full" title="Attach" aria-label="Attach file">
                         <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
                     </button>
@@ -159,15 +185,17 @@
                     <div class="relative min-w-0 flex-1">
                         <input type="text" name="message" id="message-input" placeholder="Type a message"
                                class="inbox-input w-full rounded-3xl px-4 py-3 text-sm">
-                        <p id="record-indicator" class="pointer-events-none absolute inset-0 hidden items-center rounded-3xl bg-red-600/90 px-4 text-xs font-bold text-white">Recording… release to stop</p>
                     </div>
 
                     <button type="submit" class="inbox-btn-primary flex h-11 min-w-[4.5rem] items-center justify-center rounded-full px-4 text-sm font-bold">
                         Send
                     </button>
                 </form>
-                <p class="mx-auto mt-2 max-w-3xl text-center text-[10px] inbox-muted">
-                    Voice is converted to OGG/MP3 on the server when <code class="rounded bg-black/10 px-1">ffmpeg</code> is installed (<code class="rounded bg-black/10 px-1">FFMPEG_BINARY</code> in .env). Media links must be HTTPS and publicly reachable by Meta.
+                <p class="mx-auto mt-2 max-w-3xl text-center text-[10px] leading-relaxed inbox-muted">
+                    <strong>Browser</strong> needs microphone permission (HTTPS). <strong>Linux server:</strong>
+                    <code class="rounded bg-black/10 px-1">sudo apt update &amp;&amp; sudo apt install -y ffmpeg</code>,
+                    then <code class="rounded bg-black/10 px-1">which ffmpeg</code> → set <code class="rounded bg-black/10 px-1">FFMPEG_BINARY</code> in <code class="rounded bg-black/10 px-1">.env</code> if not on PATH.
+                    Ensure <code class="rounded bg-black/10 px-1">php artisan storage:link</code>, writable <code class="rounded bg-black/10 px-1">storage/</code>, and <code class="rounded bg-black/10 px-1">APP_URL</code> is HTTPS so Meta can fetch media.
                 </p>
             </div>
 
@@ -290,6 +318,10 @@
 }
 .inbox-msg-text { color: var(--inbox-bubble-text); }
 .inbox-msg-meta { color: var(--inbox-muted); }
+.inbox-draft-strip { border-color: var(--inbox-border); background: var(--inbox-input-bg); color: var(--inbox-text); }
+.inbox-composer-icon--recording { color: #ef4444 !important; animation: inbox-pulse 1s ease-in-out infinite; }
+@keyframes inbox-pulse { 50% { opacity: 0.65; } }
+.inbox-rec-dot { animation: inbox-pulse 1s ease-in-out infinite; }
 </style>
 @endpush
 
@@ -322,31 +354,43 @@
         return d.innerHTML;
     }
 
+    function fmtDur(sec) {
+        const s = Math.max(0, Math.floor(sec));
+        const m = Math.floor(s / 60);
+        const r = s % 60;
+        return m + ':' + String(r).padStart(2, '0');
+    }
+
     function renderMessage(m) {
         const out = m.direction === 'outgoing';
         const align = out ? 'justify-end' : 'justify-start';
         const bubble = out ? 'inbox-bubble inbox-bubble--out' : 'inbox-bubble inbox-bubble--in';
+        const mt = (m.media_type || '').toLowerCase();
         let inner = '';
-        if (m.media_type === 'image' && m.media_url) {
-            inner += `<a href="${escapeHtml(m.media_url)}" target="_blank" rel="noopener" class="inbox-media-link block overflow-hidden rounded-xl mb-2"><img src="${escapeHtml(m.media_url)}" alt="" class="inbox-media-img max-h-64 w-full object-cover" loading="lazy"></a>`;
+        if (mt === 'image' && m.media_url) {
+            inner += `<a href="${escapeHtml(m.media_url)}" target="_blank" rel="noopener" class="inbox-media-link mb-2 block overflow-hidden rounded-xl last:mb-0"><img src="${escapeHtml(m.media_url)}" alt="" class="inbox-media-img max-h-64 w-full object-cover" loading="lazy"></a>`;
         }
-        if (m.media_type === 'video' && m.media_url) {
-            inner += `<div class="inbox-media-card overflow-hidden rounded-xl mb-2"><video controls playsinline preload="metadata" class="inbox-video max-h-64 w-full bg-black/20" src="${escapeHtml(m.media_url)}"></video></div>`;
+        if (mt === 'video' && m.media_url) {
+            inner += `<div class="inbox-media-card mb-2 overflow-hidden rounded-xl last:mb-0"><video controls playsinline preload="metadata" class="inbox-video max-h-64 w-full bg-black/20" src="${escapeHtml(m.media_url)}"></video></div>`;
         }
-        if (m.media_type === 'audio' && m.media_url) {
-            inner += `<div class="inbox-voice-row mb-2 flex items-center gap-2 rounded-xl bg-black/15 px-2 py-2"><span class="inbox-voice-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--inbox-accent)] text-[var(--inbox-accent-contrast)]"><svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg></span><audio controls preload="metadata" class="min-w-0 flex-1 max-w-full h-9" src="${escapeHtml(m.media_url)}"></audio></div>`;
+        if (mt === 'audio' && m.media_url) {
+            inner += `<div class="inbox-voice-row mb-2 flex items-center gap-2 rounded-xl bg-black/15 px-2 py-2 last:mb-0"><span class="inbox-voice-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--inbox-accent)] text-[var(--inbox-accent-contrast)]"><svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg></span><audio controls preload="metadata" class="h-9 min-w-0 max-w-full flex-1" src="${escapeHtml(m.media_url)}"></audio></div>`;
         }
-        if (m.media_type === 'document' && m.media_url) {
-            inner += `<a href="${escapeHtml(m.media_url)}" target="_blank" rel="noopener" class="inbox-doc-card mb-2 flex items-center gap-3 rounded-xl border border-[var(--inbox-border)] bg-black/10 px-3 py-2.5"><span class="text-2xl">📄</span><span class="min-w-0 flex-1 text-sm font-medium truncate">${escapeHtml(m.filename || 'Document')}</span><span class="shrink-0 text-xs font-semibold text-[var(--inbox-accent)]">Open</span></a>`;
+        if (mt === 'document' && m.media_url) {
+            inner += `<a href="${escapeHtml(m.media_url)}" target="_blank" rel="noopener" class="inbox-doc-card mb-2 flex items-center gap-3 rounded-xl border border-[var(--inbox-border)] bg-black/10 px-3 py-2.5 last:mb-0"><span class="text-2xl">📄</span><span class="min-w-0 flex-1 truncate text-sm font-medium">${escapeHtml(m.filename || 'Document')}</span><span class="shrink-0 text-xs font-semibold text-[var(--inbox-accent)]">Open</span></a>`;
+        }
+        if (m.media_url && !['image', 'video', 'audio', 'document'].includes(mt)) {
+            inner += `<a href="${escapeHtml(m.media_url)}" target="_blank" rel="noopener" class="inbox-doc-card mb-2 flex items-center gap-3 rounded-xl border border-[var(--inbox-border)] bg-black/10 px-3 py-2.5 last:mb-0"><span class="text-2xl">📎</span><span class="min-w-0 flex-1 truncate text-sm font-medium">${escapeHtml(m.filename || mt || 'Attachment')}</span><span class="shrink-0 text-xs font-semibold text-[var(--inbox-accent)]">Open</span></a>`;
         }
         if (m.content && m.content !== '[Attachment]') {
-            inner += `<div class="inbox-msg-text whitespace-pre-wrap text-sm leading-relaxed">${escapeHtml(m.content).replace(/\n/g, '<br>')}</div>`;
+            inner += `<div class="inbox-msg-text mt-1 whitespace-pre-wrap text-sm leading-relaxed first:mt-0">${escapeHtml(m.content).replace(/\n/g, '<br>')}</div>`;
         }
         if (!inner) inner = '<span class="text-xs opacity-70">(empty)</span>';
         let statusHtml = '';
         if (out) {
             if (m.status === 'failed') statusHtml = '<span class="rounded bg-red-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white">Not delivered</span>';
             else if (m.status === 'sent') statusHtml = '<span class="opacity-60">✓</span>';
+            if (m.source) statusHtml += ' <span class="opacity-60">· ' + escapeHtml(String(m.source).replace(/_/g, ' ')) + '</span>';
         }
         return `<div class="inbox-msg-row flex ${align} mb-3" data-message-id="${m.id}"><div class="inbox-msg-col max-w-[min(100%,28rem)] sm:max-w-[min(100%,32rem)]"><div class="${bubble} shadow-sm">${inner}</div><div class="inbox-msg-meta mt-1 flex flex-wrap items-center gap-x-2 text-[11px] ${out ? 'justify-end' : 'justify-start'}"><span class="opacity-80">${escapeHtml(m.time || '')}</span>${statusHtml ? ' ' + statusHtml : ''}</div></div></div>`;
     }
@@ -391,16 +435,102 @@
     scrollBottom();
 
     const micBtn = document.getElementById('mic-btn');
-    const recordInd = document.getElementById('record-indicator');
     const fileInput = document.getElementById('attachment-input');
+    const recordPanel = document.getElementById('record-panel');
+    const recordTimer = document.getElementById('record-timer');
+    const recordFill = document.getElementById('record-progress-fill');
+    const recordStopBtn = document.getElementById('record-stop-btn');
+    const draftStrip = document.getElementById('composer-draft');
+    const draftIcon = document.getElementById('draft-icon');
+    const draftLabel = document.getElementById('draft-label');
+    const draftName = document.getElementById('draft-name');
+    const draftMeta = document.getElementById('draft-meta');
+    const draftClear = document.getElementById('draft-clear');
+
     let mediaRecorder = null;
     let chunks = [];
+    let recordChunksInterval = null;
+    let recordUiInterval = null;
+    let recordStartedAt = 0;
+    const RECORD_BAR_CAP_SEC = 120;
 
-    if (micBtn && navigator.mediaDevices?.getUserMedia) {
-        micBtn.addEventListener('mousedown', startRec);
-        micBtn.addEventListener('touchstart', function (e) { e.preventDefault(); startRec(); }, { passive: false });
-        window.addEventListener('mouseup', stopRec);
-        window.addEventListener('touchend', stopRec);
+    function showDraft(icon, label, name, meta) {
+        if (!draftStrip) return;
+        draftIcon.textContent = icon;
+        draftLabel.textContent = label;
+        draftName.textContent = name;
+        draftMeta.textContent = meta || '';
+        draftStrip.classList.remove('hidden');
+    }
+
+    function hideDraft() {
+        draftStrip?.classList.add('hidden');
+        if (draftIcon) draftIcon.textContent = '📎';
+        if (draftLabel) draftLabel.textContent = 'Ready to send';
+        if (draftName) draftName.textContent = '';
+        if (draftMeta) draftMeta.textContent = '';
+    }
+
+    function updateDraftFromInput() {
+        const f = fileInput?.files?.[0];
+        if (!f) {
+            hideDraft();
+            return;
+        }
+        const t = f.type || '';
+        let icon = '📎';
+        let label = 'Attachment';
+        if (t.startsWith('image/')) { icon = '🖼'; label = 'Image'; }
+        else if (t.startsWith('video/')) { icon = '🎬'; label = 'Video'; }
+        else if (t.startsWith('audio/')) { icon = '🎤'; label = 'Voice note'; }
+        else if (t === 'application/pdf' || /\.pdf$/i.test(f.name)) { icon = '📄'; label = 'Document'; }
+        const sz = f.size < 1024 ? f.size + ' B' : f.size < 1048576 ? (f.size / 1024).toFixed(1) + ' KB' : (f.size / 1048576).toFixed(1) + ' MB';
+        showDraft(icon, label, f.name, sz);
+    }
+
+    fileInput?.addEventListener('change', updateDraftFromInput);
+    draftClear?.addEventListener('click', function () {
+        if (fileInput) fileInput.value = '';
+        hideDraft();
+    });
+
+    function showRecordUi() {
+        recordPanel?.classList.remove('hidden');
+        micBtn?.classList.add('inbox-composer-icon--recording');
+        recordStartedAt = Date.now();
+        if (recordTimer) recordTimer.textContent = '0:00';
+        if (recordFill) recordFill.style.width = '0%';
+        if (recordUiInterval) clearInterval(recordUiInterval);
+        recordUiInterval = setInterval(function () {
+            const sec = (Date.now() - recordStartedAt) / 1000;
+            if (recordTimer) recordTimer.textContent = fmtDur(sec);
+            if (recordFill) recordFill.style.width = Math.min(100, (sec / RECORD_BAR_CAP_SEC) * 100) + '%';
+        }, 100);
+    }
+
+    function hideRecordUi() {
+        recordPanel?.classList.add('hidden');
+        micBtn?.classList.remove('inbox-composer-icon--recording');
+        if (recordUiInterval) {
+            clearInterval(recordUiInterval);
+            recordUiInterval = null;
+        }
+        if (recordFill) recordFill.style.width = '0%';
+    }
+
+    function stopRec(force) {
+        if (recordChunksInterval) {
+            clearInterval(recordChunksInterval);
+            recordChunksInterval = null;
+        }
+        if (!mediaRecorder || mediaRecorder.state !== 'recording') {
+            hideRecordUi();
+            return;
+        }
+        if (!force && (Date.now() - recordStartedAt) < 250) {
+            return;
+        }
+        mediaRecorder.stop();
     }
 
     async function startRec() {
@@ -408,29 +538,52 @@
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             chunks = [];
-            mediaRecorder = new MediaRecorder(stream);
-            mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-            mediaRecorder.onstop = () => {
-                stream.getTracks().forEach(t => t.stop());
+            const MR = window.MediaRecorder;
+            const mime = MR.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : (MR.isTypeSupported('audio/webm') ? 'audio/webm' : '');
+            mediaRecorder = mime ? new MR(stream, { mimeType: mime }) : new MR(stream);
+            mediaRecorder.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+            mediaRecorder.onstop = function () {
+                hideRecordUi();
+                stream.getTracks().forEach(function (t) { t.stop(); });
                 const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
                 const dt = new DataTransfer();
-                dt.items.add(new File([blob], 'voice-note.webm', { type: blob.type }));
+                const ext = (blob.type || '').indexOf('mp4') >= 0 ? 'm4a' : 'webm';
+                dt.items.add(new File([blob], 'voice-note.' + ext, { type: blob.type || 'audio/webm' }));
                 if (fileInput) fileInput.files = dt.files;
-                if (recordInd) { recordInd.classList.add('hidden'); recordInd.classList.remove('flex'); }
+                const sec = (Date.now() - recordStartedAt) / 1000;
+                showDraft('🎤', 'Voice note (ready)', 'voice-note.' + ext, fmtDur(sec));
                 mediaRecorder = null;
             };
-            mediaRecorder.start();
-            if (recordInd) { recordInd.classList.remove('hidden'); recordInd.classList.add('flex'); }
+            showRecordUi();
+            try {
+                mediaRecorder.start(250);
+            } catch (e) {
+                mediaRecorder.start();
+            }
+            recordChunksInterval = setInterval(function () {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    try { mediaRecorder.requestData(); } catch (e) {}
+                }
+            }, 1000);
         } catch (e) {
-            alert('Microphone access denied or not available.');
+            hideRecordUi();
+            alert('Microphone access denied or not available. Use HTTPS and allow the mic for this site.');
         }
     }
 
-    function stopRec() {
-        if (mediaRecorder && mediaRecorder.state === 'recording') {
-            mediaRecorder.stop();
-        }
-    }
+    micBtn?.addEventListener('mousedown', function (e) { e.preventDefault(); startRec(); });
+    micBtn?.addEventListener('touchstart', function (e) { e.preventDefault(); startRec(); }, { passive: false });
+    window.addEventListener('mouseup', function () { stopRec(false); });
+    window.addEventListener('touchend', function () { stopRec(false); });
+    recordStopBtn?.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        stopRec(true);
+    });
+
+    document.getElementById('reply-form')?.addEventListener('submit', function () {
+        hideDraft();
+    });
 })();
 @endif
 </script>

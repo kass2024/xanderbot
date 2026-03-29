@@ -423,6 +423,7 @@ $messages = $conversation->messages()
 ->orderBy('created_at','asc')
 ->get()
 ->map(function ($m) {
+    $dm = $m->displayMedia();
 
     return [
 
@@ -432,9 +433,11 @@ $messages = $conversation->messages()
 
         'content' => $m->content,
 
-        'media_type' => $m->media_type,
-        'media_url'  => $m->media_url,
-        'filename'   => $m->filename,
+        'media_type' => $dm['type'],
+        'media_url'  => $dm['url'],
+        'filename'   => $dm['filename'],
+
+        'source' => $m->source,
 
         // delivery status
         'status' => $m->status ?? 'pending',
