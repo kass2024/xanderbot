@@ -75,7 +75,7 @@
 
                             <td class="px-6 py-4">
                                 <div class="font-semibold text-slate-900">
-                                    {{ $account->name }}
+                                    {{ $account->display_name }}
                                 </div>
                                 <div class="mt-1 font-mono text-xs text-slate-400">
                                     {{ $account->meta_id ?? $account->ad_account_id }}
