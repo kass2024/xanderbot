@@ -374,4 +374,43 @@ class Conversation extends Model
             ->where('direction', 'incoming')
             ->where('is_read', false);
     }
+
+    /**
+     * Last message from the customer (for “online” / last seen).
+     */
+    public function lastCustomerMessage(): ?Message
+    {
+        if ($this->relationLoaded('messages')) {
+            return $this->messages
+                ->where('direction', 'incoming')
+                ->sortByDesc('id')
+                ->first();
+        }
+
+        return $this->messages()
+            ->where('direction', 'incoming')
+            ->latest('id')
+            ->first();
+    }
+
+    public function getIsOnlineAttribute(): bool
+    {
+        $m = $this->lastCustomerMessage();
+
+        return $m && $m->created_at && $m->created_at->gt(now()->subMinutes(3));
+    }
+
+    public function customerLastSeenLabel(): string
+    {
+        $m = $this->lastCustomerMessage();
+        if (! $m || ! $m->created_at) {
+            return 'No messages yet';
+        }
+
+        if ($m->created_at->gt(now()->subMinutes(3))) {
+            return 'Online';
+        }
+
+        return 'Last seen '.$m->created_at->diffForHumans();
+    }
 }

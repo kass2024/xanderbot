@@ -110,8 +110,8 @@ public function reply(Request $request, Conversation $conversation)
 {
 
 $request->validate([
-'message'=>'nullable|string|max:5000',
-'attachment'=>'nullable|file|max:20000'
+    'message' => 'nullable|string|max:5000',
+    'attachment' => 'nullable|file|max:25600|mimes:jpeg,jpg,png,gif,webp,pdf,doc,docx,mp3,m4a,ogg,opus,wav,webm',
 ]);
 
 $text = $request->message;
@@ -147,10 +147,12 @@ $filename = $file->getClientOriginalName();
 
 $mime = $file->getMimeType();
 
-if(str_contains($mime,'image')){
-$mediaType='image';
-}else{
-$mediaType='document';
+if (str_contains($mime, 'image')) {
+    $mediaType = 'image';
+} elseif (str_starts_with((string) $mime, 'audio/')) {
+    $mediaType = 'audio';
+} else {
+    $mediaType = 'document';
 }
 
 }
@@ -162,15 +164,21 @@ $mediaType='document';
 |--------------------------------------------------------------------------
 */
 
+$displayContent = $text;
+if ($mediaType === 'audio' && ($displayContent === null || $displayContent === '')) {
+    $displayContent = '🎤 Voice note';
+}
+
 $message = Message::create([
-'conversation_id'=>$conversation->id,
-'direction'=>'outgoing',
-'content'=>$text,
-'media_type'=>$mediaType,
-'media_url'=>$fileUrl,
-'filename'=>$filename,
-'status'=>'sending',
-'is_read'=>1
+    'conversation_id' => $conversation->id,
+    'direction' => 'outgoing',
+    'content' => $displayContent ?? '',
+    'type' => $mediaType ? 'media' : 'text',
+    'media_type' => $mediaType,
+    'media_url' => $fileUrl,
+    'filename' => $filename,
+    'status' => 'sending',
+    'is_read' => 1,
 ]);
 
 
@@ -250,6 +258,23 @@ $response = Http::withToken($token)
 "link"=>$fileUrl,
 "filename"=>$filename
 ]
+
+]);
+
+}
+
+elseif ($mediaType === 'audio') {
+
+$response = Http::withToken($token)
+->timeout(config('services.api.timeout'))
+->post($endpoint, [
+
+'messaging_product' => 'whatsapp',
+'to' => $conversation->phone_number,
+'type' => 'audio',
+'audio' => [
+'link' => $fileUrl,
+],
 
 ]);
 
@@ -382,18 +407,24 @@ $messages = $conversation->messages()
 | online if last activity < 60 seconds
 */
 
-$online = false;
+    $lastIncoming = $conversation->messages()
+        ->where('direction', 'incoming')
+        ->latest('id')
+        ->first();
 
-if ($conversation->last_activity_at) {
+    $online = $lastIncoming
+        && $lastIncoming->created_at
+        && $lastIncoming->created_at->gt(now()->subMinutes(3));
 
-    $online = now()->diffInSeconds($conversation->last_activity_at) < 60;
-
-}
+    $lastSeen = $lastIncoming && $lastIncoming->created_at
+        ? $lastIncoming->created_at->diffForHumans()
+        : null;
 
 return response()->json([
 
     'messages' => $messages,
-    'online'   => $online
+    'online'   => $online,
+    'last_seen' => $lastSeen,
 
 ]);
 

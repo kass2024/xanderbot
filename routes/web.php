@@ -299,9 +299,11 @@ Route::middleware(['auth','verified','role:admin'])
             ->group(function () {
 
                 Route::get('/','index')->name('index');
+                Route::get('{conversation}/messages', 'fetchMessages')->name('fetch');
                 Route::post('{conversation}/reply','reply')->name('reply');
                 Route::post('{conversation}/toggle','toggle')->name('toggle');
                 Route::post('{conversation}/close','close')->name('close');
+                Route::delete('{conversation}/delete', 'deleteConversation')->name('delete');
             });
 
         /*
@@ -586,9 +588,6 @@ Route::get(
     '/admin/creatives/{creative}/preview',
     [CreativeController::class, 'preview']
 )->name('admin.creatives.preview');
-Route::get('/admin/inbox/{conversation}/messages', 
-    [App\Http\Controllers\Admin\InboxController::class, 'fetchMessages']
-)->name('admin.inbox.fetch');
 Route::get('/admin/bulk', function(){
 return view('admin.bulk.index');
 })->middleware('auth');
@@ -597,8 +596,4 @@ Route::post('/admin/bulk-send',
 [InboxController::class,'bulkSend']
 )->name('admin.bulk.send')->middleware('auth');
 
-Route::delete('/admin/inbox/{conversation}/delete', [InboxController::class,'deleteConversation'])
-    ->name('admin.inbox.delete');
-    Route::get('/admin/inbox/{conversation}/messages', [InboxController::class, 'fetchMessages'])
-    ->name('admin.inbox.messages');
 require __DIR__.'/auth.php';

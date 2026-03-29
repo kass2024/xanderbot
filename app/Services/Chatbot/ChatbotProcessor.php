@@ -326,10 +326,12 @@ class ChatbotProcessor
                 'direction'       => 'outgoing',
                 'content'         => $response['text'],
                 'status'          => 'pending',
-                'meta'            => json_encode([
+                'source'          => $response['source'] ?? null,
+                'confidence'      => $response['confidence'] ?? null,
+                'meta'            => [
                     'confidence' => $response['confidence'] ?? null,
                     'source'     => $response['source'] ?? null,
-                ])
+                ],
             ]);
 
             $this->log('OUTGOING TEXT STORED', [
@@ -343,8 +345,9 @@ class ChatbotProcessor
                 'conversation_id' => $conversationId,
                 'direction'       => 'outgoing',
                 'content'         => '[Attachment]',
-                'status'          => 'pending',
-                'meta'            => json_encode($attachment)
+                'type'              => 'media',
+                'status'            => 'pending',
+                'meta'              => $attachment,
             ]);
 
             $this->log('OUTGOING ATTACHMENT STORED', [

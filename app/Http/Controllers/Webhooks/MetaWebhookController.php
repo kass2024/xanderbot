@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Webhooks;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use Symfony\Component\HttpFoundation\Response;
@@ -12,6 +13,7 @@ use App\Models\Client;
 use App\Models\Message;
 use App\Services\Chatbot\ChatbotProcessor;
 use App\Services\Chatbot\MessageDispatcher;
+use App\Services\Chatbot\SpeechService;
 
 class MetaWebhookController extends Controller
 {
@@ -123,10 +125,16 @@ class MetaWebhookController extends Controller
                 continue;
             }
 
-            $text = $this->extractMessageText($incoming);
+            $payload = $this->extractInboundPayload($incoming);
 
-            if (!$text) {
-                Log::info('Unsupported message type received');
+            $text = $payload['text'] ?? '';
+
+            if ($text === '' && ! empty($payload['audio_media_id']) && config('chatbot.transcribe_inbound_audio', true)) {
+                $text = $this->downloadAndTranscribeAudio($platform, $payload['audio_media_id']) ?? '';
+            }
+
+            if ($text === '') {
+                Log::info('Unsupported or empty inbound message', ['type' => $incoming['type'] ?? null]);
                 continue;
             }
 
@@ -170,6 +178,13 @@ class MetaWebhookController extends Controller
 
                 if (empty($aiResponse) || empty($aiResponse['text'])) {
                     return;
+                }
+
+                if (config('chatbot.voice_faq_replies') && $this->shouldAttachVoiceReply($aiResponse)) {
+                    $path = app(SpeechService::class)->textToSpeechMp3($aiResponse['text']);
+                    if ($path) {
+                        $aiResponse['voice_url'] = asset('storage/'.$path);
+                    }
                 }
 
                 $results = $this->dispatcher->send(
@@ -260,28 +275,98 @@ class MetaWebhookController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | Extract Message Text
+    | Extract inbound payload (text and/or audio id)
     |--------------------------------------------------------------------------
     */
-    protected function extractMessageText(array $incoming): ?string
+    protected function extractInboundPayload(array $incoming): array
     {
-        return match ($incoming['type'] ?? null) {
+        $type = $incoming['type'] ?? null;
 
-            'text' =>
-                trim($incoming['text']['body'] ?? ''),
-
-            'button' =>
-                trim($incoming['button']['text'] ?? ''),
-
-            'interactive' =>
-                trim(
+        return match ($type) {
+            'text' => [
+                'text' => trim($incoming['text']['body'] ?? ''),
+            ],
+            'button' => [
+                'text' => trim($incoming['button']['text'] ?? ''),
+            ],
+            'interactive' => [
+                'text' => trim(
                     $incoming['interactive']['button_reply']['title']
                     ?? $incoming['interactive']['list_reply']['title']
                     ?? ''
                 ),
-
-            default => null,
+            ],
+            'audio' => [
+                'audio_media_id' => $incoming['audio']['id'] ?? null,
+            ],
+            default => [],
         };
+    }
+
+    protected function shouldAttachVoiceReply(array $aiResponse): bool
+    {
+        $source = $aiResponse['source'] ?? '';
+
+        return in_array($source, [
+            'direct_match',
+            'similar_question',
+            'keyword_match',
+            'faq_token_overlap',
+            'semantic_match',
+        ], true);
+    }
+
+    protected function downloadAndTranscribeAudio(PlatformMetaConnection $platform, string $mediaId): ?string
+    {
+        $token = $this->dispatcher->accessTokenForPlatform($platform);
+        if (! $token) {
+            return null;
+        }
+
+        $base = rtrim((string) config('services.whatsapp.graph_url'), '/');
+        $version = config('services.whatsapp.graph_version');
+
+        try {
+            $metaResponse = Http::withToken($token)
+                ->timeout(45)
+                ->get("{$base}/{$version}/{$mediaId}");
+
+            if ($metaResponse->failed()) {
+                Log::warning('WhatsApp media meta failed', ['status' => $metaResponse->status()]);
+
+                return null;
+            }
+
+            $mediaUrl = $metaResponse->json('url');
+            if (! $mediaUrl) {
+                return null;
+            }
+
+            $binary = Http::withToken($token)
+                ->timeout(90)
+                ->get($mediaUrl);
+
+            if ($binary->failed()) {
+                return null;
+            }
+
+            $tmp = tempnam(sys_get_temp_dir(), 'wa_audio_');
+            if ($tmp === false) {
+                return null;
+            }
+
+            file_put_contents($tmp, $binary->body());
+
+            $text = app(SpeechService::class)->transcribeFile($tmp, 'voice.ogg');
+
+            @unlink($tmp);
+
+            return $text;
+        } catch (\Throwable $e) {
+            Log::error('Audio transcription pipeline failed', ['error' => $e->getMessage()]);
+
+            return null;
+        }
     }
 
     /*

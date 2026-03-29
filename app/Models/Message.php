@@ -20,6 +20,11 @@ class Message extends Model
         'external_message_id',  // WhatsApp / Twilio ID
         'confidence',           // AI confidence score
         'source',               // faq | grounded_ai | ai | system
+        'media_type',
+        'media_url',
+        'filename',
+        'is_read',
+        'read_at',
     ];
 
     protected $casts = [
