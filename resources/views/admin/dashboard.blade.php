@@ -19,7 +19,7 @@ openAds: {{ str_contains($route,'admin.accounts')
 || str_contains($route,'admin.adsets')
 || str_contains($route,'admin.ads')
 || str_contains($route,'admin.creatives')
-|| str_contains($route,'admin.analytics') ? 'true' : 'false' }},
+? 'true' : 'false' }},
 
 openAutomation: {{ str_contains($route,'admin.inbox')
 || str_contains($route,'admin.faq') ? 'true' : 'false' }},
@@ -113,11 +113,6 @@ class="block py-2 px-3 rounded-lg hover:bg-gray-100">
 Ads
 </a>
 
-<a href="{{ route('admin.analytics.index') }}"
-class="block py-2 px-3 rounded-lg hover:bg-gray-100">
-Insights & Reports
-</a>
-
 </div>
 </div>
 
@@ -134,7 +129,7 @@ Insights & Reports
 <button @click="openAutomation=!openAutomation"
 class="w-full flex justify-between items-center px-4 py-3 rounded-xl font-semibold text-gray-800 hover:bg-gray-100">
 
-🤖 Inbox &amp; knowledge
+🤖 Chatbot monitor
 
 <svg :class="openAutomation ? 'rotate-90':''"
 class="w-4 h-4 transition-transform"
