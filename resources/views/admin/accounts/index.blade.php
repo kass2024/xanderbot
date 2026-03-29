@@ -1,4 +1,4 @@
-@extends('layouts.app')
+@extends('layouts.admin')
 
 @section('content')
 
@@ -7,16 +7,13 @@
     {{-- HEADER --}}
     <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
 
-        <div class="flex flex-col sm:flex-row sm:items-start gap-4 sm:gap-6">
-            <x-admin.page-back :href="route('admin.dashboard')" label="Back to Dashboard" />
-            <div>
+        <div>
                 <h1 class="text-3xl font-bold tracking-tight text-slate-900">
                     Ad Accounts
                 </h1>
                 <p class="text-slate-500 mt-2 max-w-xl">
                     Sync and manage Meta ad accounts linked to Xander Global Scholars.
                 </p>
-            </div>
         </div>
 
         <form method="POST" action="{{ route('admin.accounts.store') }}" id="syncForm" class="shrink-0">

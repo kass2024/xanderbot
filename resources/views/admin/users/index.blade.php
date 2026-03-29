@@ -1,4 +1,4 @@
-@extends('layouts.app')
+@extends('layouts.admin')
 
 @section('content')
 
@@ -6,16 +6,13 @@
 
 <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
 
-    <div class="flex flex-col sm:flex-row sm:items-start gap-4 sm:gap-6">
-        <x-admin.page-back :href="route('admin.settings.index')" label="Back to Settings" />
-        <div>
+    <div>
             <h1 class="text-3xl font-bold tracking-tight text-slate-900">
                 User management
             </h1>
             <p class="text-slate-500 mt-2 max-w-xl">
                 Platform logins, roles, and access for Xander Global Scholars admins and clients.
             </p>
-        </div>
     </div>
 
     <a href="{{ route('admin.users.create') }}"

@@ -1,4 +1,4 @@
-@extends('layouts.app')
+@extends('layouts.admin')
 
 @section('content')
 
@@ -15,8 +15,6 @@ Platform Settings
 Configure your Xander Global Scholars workspace, Meta integration, billing, and team access.
 </p>
 </div>
-
-<x-admin.page-back :href="route('admin.dashboard')" label="Back to Dashboard" />
 
 </div>
 

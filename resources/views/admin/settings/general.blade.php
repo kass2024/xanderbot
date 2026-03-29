@@ -1,4 +1,4 @@
-@extends('layouts.app')
+@extends('layouts.admin')
 
 @section('content')
 
@@ -13,7 +13,6 @@ General Settings
 </h1>
 <p class="text-sm text-gray-500 mt-1">Platform identity and Xander Global Scholars contact details</p>
 </div>
-<x-admin.page-back :href="route('admin.settings.index')" label="Back to Settings" />
 </div>
 
 <form method="POST" action="{{ route('admin.settings.general.update') }}" class="space-y-6">

@@ -1,6 +1,10 @@
-<x-app-layout>
+@extends('layouts.admin')
 
-<div class="h-screen flex bg-[#f0f2f5] overflow-hidden">
+@section('title', 'Inbox')
+
+@section('content')
+
+<div class="-m-4 flex h-[calc(100vh-3.5rem)] min-h-[560px] overflow-hidden bg-[#f0f2f5] lg:-m-8">
 
 {{-- SIDEBAR --}}
 <div id="sidebar"
@@ -19,8 +23,8 @@ Inbox
 <div class="flex items-center gap-2">
 
 <a href="{{ route('admin.dashboard') }}"
-class="bg-gray-700 text-white text-xs px-3 py-1 rounded-md">
-Dashboard
+class="bg-xander-navy text-white text-xs px-3 py-1 rounded-md hover:bg-xander-secondary">
+Overview
 </a>
 
 <a href="/admin/bulk"
@@ -360,4 +364,4 @@ scrollBottom();
 
 </script>
 
-</x-app-layout>
+@endsection

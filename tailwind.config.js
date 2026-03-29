@@ -14,6 +14,14 @@ export default {
             fontFamily: {
                 sans: ['Figtree', ...defaultTheme.fontFamily.sans],
             },
+            colors: {
+                xander: {
+                    navy: '#012F6B',
+                    secondary: '#254D81',
+                    accent: '#002765',
+                    gold: '#F2A65A',
+                },
+            },
         },
     },
 

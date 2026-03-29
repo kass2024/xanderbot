@@ -35,7 +35,15 @@ class AdSetController extends Controller
             ->latest()
             ->paginate(20);
 
-        return view('admin.adsets.index', compact('adsets'));
+        return view('admin.adsets.index', [
+            'adsets' => $adsets,
+            'adsetStats' => [
+                'total' => AdSet::count(),
+                'active' => AdSet::where('status', 'ACTIVE')->count(),
+                'paused' => AdSet::where('status', 'PAUSED')->count(),
+                'draft' => AdSet::where('status', 'DRAFT')->count(),
+            ],
+        ]);
     }
 
     /*

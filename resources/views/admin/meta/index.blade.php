@@ -1,10 +1,10 @@
-<x-app-layout>
+@extends('layouts.admin')
 
-<div class="max-w-5xl mx-auto px-4 sm:px-6 py-10">
+@section('title', 'Business Manager')
 
-    <div class="mb-6">
-        <x-admin.page-back :href="route('admin.dashboard')" label="Back to Dashboard" />
-    </div>
+@section('content')
+
+<div class="mx-auto max-w-5xl">
 
     <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/5">
 
@@ -107,4 +107,4 @@
 
 </div>
 
-</x-app-layout>
+@endsection

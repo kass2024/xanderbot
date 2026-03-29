@@ -32,7 +32,7 @@ class="text-sm font-medium text-gray-700"
 
 <x-text-input
 id="email"
-class="mt-2 block w-full rounded-xl border-gray-300 shadow-sm focus:border-blue-900 focus:ring-blue-900 py-3 px-4"
+class="mt-2 block w-full rounded-xl border-gray-300 shadow-sm focus:border-xander-navy focus:ring-xander-navy py-3 px-4"
 type="email"
 name="email"
 :value="old('email')"
@@ -58,7 +58,7 @@ class="text-sm font-medium text-gray-700"
 <div class="relative mt-2">
 <x-text-input
 id="password"
-class="block w-full rounded-xl border-gray-300 shadow-sm focus:border-blue-900 focus:ring-blue-900 py-3 pl-4 pr-12"
+class="block w-full rounded-xl border-gray-300 shadow-sm focus:border-xander-navy focus:ring-xander-navy py-3 pl-4 pr-12"
 x-bind:type="showPassword ? 'text' : 'password'"
 name="password"
 required
@@ -95,7 +95,7 @@ aria-label="Toggle password visibility"
 <input
 id="remember_me"
 type="checkbox"
-class="rounded border-gray-300 text-blue-900 focus:ring-blue-900"
+class="rounded border-gray-300 text-xander-navy focus:ring-xander-navy"
 name="remember"
 />
 
@@ -105,7 +105,7 @@ name="remember"
 
 @if (Route::has('password.request'))
 <a
-class="text-blue-900 hover:text-blue-700 font-medium"
+class="text-xander-navy hover:text-xander-secondary font-medium"
 href="{{ route('password.request') }}">
 Forgot password?
 </a>
@@ -117,7 +117,7 @@ Forgot password?
 {{-- LOGIN BUTTON --}}
 <button
 type="submit"
-class="w-full bg-blue-900 hover:bg-blue-800 active:bg-blue-950 text-white font-semibold py-3 rounded-xl transition shadow-sm">
+class="w-full bg-xander-navy hover:bg-xander-secondary active:bg-xander-accent text-white font-semibold py-3 rounded-xl transition shadow-sm">
 
 Log in
 

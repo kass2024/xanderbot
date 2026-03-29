@@ -24,11 +24,11 @@
 
 <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
 
-<div class="flex items-center gap-3">
+<div class="flex items-center gap-4">
 
-<img src="{{ asset('img/logo.png') }}" class="w-9">
+<img src="{{ asset('img/logo.png') }}" alt="Xander Global Scholars" class="h-12 w-auto sm:h-14">
 
-<span class="font-semibold text-lg text-blue-900">
+<span class="font-semibold text-lg text-xander-navy">
 Xander Global Scholars
 </span>
 
@@ -36,7 +36,7 @@ Xander Global Scholars
 
 <a
 href="{{ route('login') }}"
-class="px-6 py-2 border border-blue-900 text-blue-900 rounded-lg hover:bg-blue-50 font-medium">
+class="px-6 py-2 border-2 border-xander-navy text-xander-navy rounded-lg hover:bg-xander-navy/5 font-medium transition">
 
 Login
 
@@ -55,7 +55,7 @@ Login
 <h1 class="text-4xl md:text-5xl font-bold mb-6 text-gray-900">
 
 AI Chatbot & Meta Ads Management  
-<span class="text-blue-900">In One Powerful Dashboard</span>
+<span class="text-xander-navy">In One Powerful Dashboard</span>
 
 </h1>
 
@@ -69,7 +69,7 @@ intelligent automation tools.
 
 <a
 href="{{ route('login') }}"
-class="bg-blue-900 hover:bg-blue-800 text-white px-8 py-4 rounded-xl text-lg font-semibold shadow">
+class="bg-xander-navy hover:bg-xander-secondary text-white px-8 py-4 rounded-xl text-lg font-semibold shadow transition">
 
 Access Dashboard
 
@@ -92,7 +92,7 @@ Platform Features
 <div class="grid md:grid-cols-3 gap-8">
 
 <div class="bg-white p-8 rounded-xl border hover:shadow-lg transition">
-<h3 class="font-semibold text-lg mb-3 text-blue-900">
+<h3 class="font-semibold text-lg mb-3 text-xander-navy">
 Meta Ads Management
 </h3>
 <p class="text-gray-600 text-sm">
@@ -103,7 +103,7 @@ from your dashboard.
 </div>
 
 <div class="bg-white p-8 rounded-xl border hover:shadow-lg transition">
-<h3 class="font-semibold text-lg mb-3 text-blue-900">
+<h3 class="font-semibold text-lg mb-3 text-xander-navy">
 AI Chatbot Automation
 </h3>
 <p class="text-gray-600 text-sm">
@@ -113,7 +113,7 @@ AI-powered chatbot automation designed to engage prospects instantly.
 </div>
 
 <div class="bg-white p-8 rounded-xl border hover:shadow-lg transition">
-<h3 class="font-semibold text-lg mb-3 text-blue-900">
+<h3 class="font-semibold text-lg mb-3 text-xander-navy">
 Real-Time Analytics
 </h3>
 <p class="text-gray-600 text-sm">
@@ -130,7 +130,7 @@ real-time analytics and actionable insights.
 
 
 <!-- CTA -->
-<section class="py-24 bg-blue-900 text-white">
+<section class="py-24 bg-gradient-to-br from-xander-navy to-xander-accent text-white">
 
 <div class="max-w-5xl mx-auto px-6 text-center">
 
@@ -138,7 +138,7 @@ real-time analytics and actionable insights.
 Manage Ads and Conversations Smarter
 </h2>
 
-<p class="text-blue-100 mb-10">
+<p class="text-white/80 mb-10">
 
 Access your dashboard to manage campaigns, automate conversations,
 and track performance in one place.
@@ -147,7 +147,7 @@ and track performance in one place.
 
 <a
 href="{{ route('login') }}"
-class="bg-yellow-500 hover:bg-yellow-400 text-blue-900 px-10 py-4 rounded-xl text-lg font-semibold shadow">
+class="bg-xander-gold hover:brightness-95 text-xander-navy px-10 py-4 rounded-xl text-lg font-semibold shadow transition">
 
 Login to Dashboard
 

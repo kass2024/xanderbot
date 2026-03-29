@@ -28,19 +28,20 @@
 <div class="bg-white rounded-3xl shadow-xl overflow-hidden grid lg:grid-cols-2">
 
 {{-- LEFT BRAND PANEL --}}
-<div class="hidden lg:flex bg-blue-900 text-white items-center justify-center p-12">
+<div class="hidden lg:flex bg-gradient-to-br from-xander-navy to-xander-accent text-white items-center justify-center p-12">
 
-<div class="text-center max-w-sm">
+<div class="text-center max-w-md">
 
 <img
 src="{{ asset('img/logo.png') }}"
-class="w-20 mx-auto mb-6">
+alt="{{ config('app.name') }}"
+class="w-44 h-auto max-w-[min(100%,280px)] mx-auto mb-8 drop-shadow-md">
 
-<h1 class="text-3xl font-bold mb-4">
+<h1 class="text-3xl font-bold mb-4 tracking-tight">
 Xander Global Scholars
 </h1>
 
-<p class="text-blue-100 leading-relaxed text-sm">
+<p class="text-white/85 leading-relaxed text-sm">
 AI chatbot automation and Meta Ads management platform.
 Manage advertising campaigns, automate WhatsApp conversations,
 and track marketing performance from one powerful dashboard.
@@ -48,7 +49,7 @@ and track marketing performance from one powerful dashboard.
 
 <div class="mt-8">
 
-<span class="inline-block bg-yellow-500 text-blue-900 px-4 py-2 rounded-lg text-sm font-semibold">
+<span class="inline-block bg-xander-gold text-xander-navy px-4 py-2 rounded-lg text-sm font-semibold shadow-sm">
 Smart Marketing Automation
 </span>
 
@@ -70,7 +71,8 @@ Smart Marketing Automation
 
 <img
 src="{{ asset('img/logo.png') }}"
-class="w-16 mx-auto mb-3">
+alt="{{ config('app.name') }}"
+class="w-28 h-auto max-w-[220px] mx-auto mb-4">
 
 <h2 class="text-lg font-semibold text-gray-800">
 Xander Global Scholars
