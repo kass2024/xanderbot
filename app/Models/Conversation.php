@@ -221,6 +221,7 @@ class Conversation extends Model
         $this->update([
             'status' => self::STATUS_BOT,
             'assigned_agent_id' => null,
+            'escalation_started_at' => null,
         ]);
     }
 

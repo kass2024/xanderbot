@@ -2,12 +2,13 @@
 
 namespace App\Services\Chatbot;
 
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Str;
 use App\Models\Conversation;
 use App\Models\Message;
+use App\Services\HumanHandoffTimeoutService;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class ChatbotProcessor
 {
@@ -147,14 +148,17 @@ class ChatbotProcessor
                     'message_id' => $incoming->id
                 ], $requestId);
 
+                app(HumanHandoffTimeoutService::class)->checkAndRelease($conversation->fresh());
+                $conversation = $conversation->fresh();
+
                 /*
                 |--------------------------------------------------------------------------
                 | HUMAN TAKEOVER CHECK
                 |--------------------------------------------------------------------------
                 */
 
-                if ($conversation->status === 'human') {
-                    $this->log('HUMAN MODE ACTIVE', [], $requestId);
+                if ($conversation->isEscalated()) {
+                    $this->log('HUMAN OR ESCALATED — skip bot reply', [], $requestId);
                     return null;
                 }
 

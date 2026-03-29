@@ -28,6 +28,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Agent silence (seconds)
+    |--------------------------------------------------------------------------
+    | If the last message in the thread is from the customer and this many
+    | seconds pass with no new reply, the conversation returns to the bot.
+    | Defaults to bot_fallback_timeout when CHAT_AGENT_SILENCE_TIMEOUT is unset.
+    */
+    'agent_silence_timeout' => env('CHAT_AGENT_SILENCE_TIMEOUT', null),
+
+    /*
+    |--------------------------------------------------------------------------
+    | No agent session (seconds)
+    |--------------------------------------------------------------------------
+    | Human mode but no agent could be assigned — release to bot after this wait.
+    */
+    'no_agent_session_timeout' => (int) env('CHAT_NO_AGENT_SESSION_TIMEOUT', 300),
+
+    /*
+    |--------------------------------------------------------------------------
     | Enable Auto Fallback to Bot
     |--------------------------------------------------------------------------
     */

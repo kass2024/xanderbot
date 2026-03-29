@@ -89,6 +89,7 @@ return [
     'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
     'access_token'    => env('WHATSAPP_ACCESS_TOKEN'),
     'timeout' => (int) env('WHATSAPP_TIMEOUT', 30),
+    'ffmpeg_binary' => env('FFMPEG_BINARY', 'ffmpeg'),
 
     ],
 

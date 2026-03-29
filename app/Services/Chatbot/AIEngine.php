@@ -62,8 +62,8 @@ class AIEngine
         |--------------------------------------------------------------------------
         */
 
-        if ($conversation && $conversation->status === 'human') {
-            $this->log('HUMAN_MODE_ACTIVE', [
+        if ($conversation && $conversation->isEscalated()) {
+            $this->log('HUMAN_OR_ESCALATED_ACTIVE', [
                 'conversation_id' => $conversation->id
             ], $requestId);
 

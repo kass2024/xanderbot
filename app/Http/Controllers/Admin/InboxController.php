@@ -5,10 +5,13 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Conversation;
 use App\Models\Message;
+use App\Services\HumanHandoffTimeoutService;
+use App\Services\WhatsAppAudioConverter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 
 class InboxController extends Controller
 {
@@ -75,6 +78,15 @@ $q->orderBy('created_at','asc');
 
 if ($activeConversation) {
 
+app(HumanHandoffTimeoutService::class)->checkAndRelease($activeConversation->fresh());
+
+$activeConversation = Conversation::with([
+'messages'=>function($q){
+$q->orderBy('created_at','asc');
+},
+'agent'
+])->find($activeConversation->id);
+
 Log::info('Conversation opened',[
 'conversation_id'=>$activeConversation->id,
 'phone'=>$activeConversation->phone_number
@@ -111,8 +123,12 @@ public function reply(Request $request, Conversation $conversation)
 
 $request->validate([
     'message' => 'nullable|string|max:5000',
-    'attachment' => 'nullable|file|max:25600|mimes:jpeg,jpg,png,gif,webp,pdf,doc,docx,mp3,m4a,ogg,opus,wav,webm',
+    'attachment' => 'nullable|file|max:25600|mimes:jpeg,jpg,png,gif,webp,pdf,doc,docx,mp3,m4a,ogg,opus,wav,webm,mp4,mov,3gp',
 ]);
+
+if (! $request->hasFile('attachment') && ! filled(trim((string) $request->message))) {
+    return back()->withErrors(['message' => 'Enter a message or attach a file.']);
+}
 
 $text = $request->message;
 
@@ -134,26 +150,38 @@ $conversation->update([
 $mediaType = null;
 $fileUrl = null;
 $filename = null;
+$path = null;
 
-if($request->hasFile('attachment')){
+if ($request->hasFile('attachment')) {
 
-$file = $request->file('attachment');
+    $file = $request->file('attachment');
 
-$path = $file->store('whatsapp','public');
+    $path = $file->store('whatsapp', 'public');
 
-$fileUrl = asset('storage/'.$path);
+    $filename = $file->getClientOriginalName();
 
-$filename = $file->getClientOriginalName();
+    $mime = (string) $file->getMimeType();
 
-$mime = $file->getMimeType();
+    if (str_contains($mime, 'image')) {
+        $mediaType = 'image';
+    } elseif (str_starts_with($mime, 'audio/')) {
+        $mediaType = 'audio';
+        $absolute = Storage::disk('public')->path($path);
+        $convertedAbs = app(WhatsAppAudioConverter::class)->toWhatsAppFormat($absolute);
+        if ($convertedAbs && is_file($convertedAbs)) {
+            if ($convertedAbs !== $absolute && is_file($absolute)) {
+                @unlink($absolute);
+            }
+            $path = dirname($path).'/'.basename($convertedAbs);
+            $filename = basename($convertedAbs);
+        }
+    } elseif (str_starts_with($mime, 'video/')) {
+        $mediaType = 'video';
+    } else {
+        $mediaType = 'document';
+    }
 
-if (str_contains($mime, 'image')) {
-    $mediaType = 'image';
-} elseif (str_starts_with((string) $mime, 'audio/')) {
-    $mediaType = 'audio';
-} else {
-    $mediaType = 'document';
-}
+    $fileUrl = URL::to(Storage::disk('public')->url($path));
 
 }
 
@@ -179,6 +207,7 @@ $message = Message::create([
     'filename' => $filename,
     'status' => 'sending',
     'is_read' => 1,
+    'source' => 'agent',
 ]);
 
 
@@ -211,79 +240,83 @@ Log::info('Sending WhatsApp request',[
 
 try {
 
-if(!$mediaType){
+$response = null;
 
-$response = Http::withToken($token)
-->timeout(config('services.api.timeout'))
-->post($endpoint,[
+if (! $mediaType) {
 
-"messaging_product"=>"whatsapp",
-"to"=>$conversation->phone_number,
-"type"=>"text",
-"text"=>[
-"body"=>$text
-]
+    $response = Http::withToken($token)
+        ->timeout(config('services.api.timeout'))
+        ->post($endpoint, [
+            'messaging_product' => 'whatsapp',
+            'to' => $conversation->phone_number,
+            'type' => 'text',
+            'text' => [
+                'body' => $text,
+            ],
+        ]);
 
-]);
+} elseif ($mediaType === 'image') {
+
+    $response = Http::withToken($token)
+        ->timeout(config('services.api.timeout'))
+        ->post($endpoint, [
+            'messaging_product' => 'whatsapp',
+            'to' => $conversation->phone_number,
+            'type' => 'image',
+            'image' => [
+                'link' => $fileUrl,
+            ],
+        ]);
+
+} elseif ($mediaType === 'video') {
+
+    $response = Http::withToken($token)
+        ->timeout(config('services.api.timeout'))
+        ->post($endpoint, [
+            'messaging_product' => 'whatsapp',
+            'to' => $conversation->phone_number,
+            'type' => 'video',
+            'video' => [
+                'link' => $fileUrl,
+            ],
+        ]);
+
+} elseif ($mediaType === 'document') {
+
+    $response = Http::withToken($token)
+        ->timeout(config('services.api.timeout'))
+        ->post($endpoint, [
+            'messaging_product' => 'whatsapp',
+            'to' => $conversation->phone_number,
+            'type' => 'document',
+            'document' => [
+                'link' => $fileUrl,
+                'filename' => $filename ?? 'file',
+            ],
+        ]);
+
+} elseif ($mediaType === 'audio') {
+
+    $response = Http::withToken($token)
+        ->timeout(config('services.api.timeout'))
+        ->post($endpoint, [
+            'messaging_product' => 'whatsapp',
+            'to' => $conversation->phone_number,
+            'type' => 'audio',
+            'audio' => [
+                'link' => $fileUrl,
+            ],
+        ]);
 
 }
 
-elseif($mediaType=='image'){
-
-$response = Http::withToken($token)
-->timeout(config('services.api.timeout'))
-->post($endpoint,[
-
-"messaging_product"=>"whatsapp",
-"to"=>$conversation->phone_number,
-"type"=>"image",
-"image"=>[
-"link"=>$fileUrl
-]
-
-]);
-
+if ($response === null) {
+    throw new \RuntimeException('No WhatsApp payload built.');
 }
 
-elseif($mediaType=='document'){
-
-$response = Http::withToken($token)
-->timeout(config('services.api.timeout'))
-->post($endpoint,[
-
-"messaging_product"=>"whatsapp",
-"to"=>$conversation->phone_number,
-"type"=>"document",
-"document"=>[
-"link"=>$fileUrl,
-"filename"=>$filename
-]
-
-]);
-
-}
-
-elseif ($mediaType === 'audio') {
-
-$response = Http::withToken($token)
-->timeout(config('services.api.timeout'))
-->post($endpoint, [
-
-'messaging_product' => 'whatsapp',
-'to' => $conversation->phone_number,
-'type' => 'audio',
-'audio' => [
-'link' => $fileUrl,
-],
-
-]);
-
-}
-
-
-Log::info('WhatsApp API response',[
-'status'=>$response->status(),
-'body'=>$response->json()
+Log::info('WhatsApp API response', [
+    'status' => $response->status(),
+    'body' => $response->json(),
 ]);
 
 
@@ -327,8 +360,9 @@ Log::error('WhatsApp exception',[
 */
 
 $conversation->update([
-'status'=>'human',
-'last_activity_at'=>now()
+    'status' => 'human',
+    'last_activity_at' => now(),
+    'escalation_started_at' => $conversation->escalation_started_at ?? now(),
 ]);
 
 return back();
@@ -355,9 +389,18 @@ Log::info('Conversation mode switched',[
 'status'=>$newStatus
 ]);
 
-$conversation->update([
-'status'=>$newStatus
-]);
+if ($newStatus === 'bot') {
+    $conversation->update([
+        'status' => 'bot',
+        'assigned_agent_id' => null,
+        'escalation_started_at' => null,
+    ]);
+} else {
+    $conversation->update([
+        'status' => 'human',
+        'escalation_started_at' => now(),
+    ]);
+}
 
 return back();
 
@@ -372,6 +415,9 @@ return back();
 
 public function fetchMessages(Conversation $conversation)
 {
+
+app(HumanHandoffTimeoutService::class)->checkAndRelease($conversation->fresh());
+$conversation = $conversation->fresh();
 
 $messages = $conversation->messages()
 ->orderBy('created_at','asc')
@@ -425,6 +471,7 @@ return response()->json([
     'messages' => $messages,
     'online'   => $online,
     'last_seen' => $lastSeen,
+    'conversation_status' => $conversation->status,
 
 ]);
 
