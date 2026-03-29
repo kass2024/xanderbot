@@ -10,9 +10,12 @@
 
 <div class="bg-white shadow rounded-2xl p-10">
 
-<h2 class="text-2xl font-bold mb-8">
+<div class="flex flex-wrap items-center justify-between gap-4 mb-8">
+<h2 class="text-2xl font-bold">
 Create Ad Creative
 </h2>
+<x-admin.page-back :href="route('admin.creatives.index')" label="Back to Creatives" />
+</div>
 
 
 @if($errors->any())
@@ -282,16 +285,7 @@ class="w-full border rounded-xl px-4 py-3">
 
 
 
-<div class="flex justify-between">
-
-<a
-href="{{ route('admin.creatives.index') }}"
-class="text-gray-600 hover:text-gray-900">
-
-Cancel
-
-</a>
-
+<div class="flex justify-end">
 
 <button
 type="submit"

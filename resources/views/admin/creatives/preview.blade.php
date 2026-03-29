@@ -20,7 +20,7 @@ Creative Preview
 <div>
 
 <div class="font-semibold">
-Parrot Canada Visa Consultant
+Xander Global Scholars
 </div>
 
 <div class="text-xs text-gray-500">

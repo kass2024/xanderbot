@@ -19,12 +19,7 @@ Define the objective for your Meta advertising campaign.
 
 </div>
 
-<a
-href="{{ route('admin.campaigns.index') }}"
-class="text-sm text-gray-500 hover:text-gray-700"
->
-← Back to Campaigns
-</a>
+<x-admin.page-back :href="route('admin.campaigns.index')" label="Back to Campaigns" />
 
 </div>
 

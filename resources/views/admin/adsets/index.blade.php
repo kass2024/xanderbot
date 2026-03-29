@@ -21,11 +21,7 @@ Manage targeting, budgets and delivery settings.
 </div>
 <div class="flex gap-3">
 
-<a
-href="{{ route('admin.campaigns.index') }}"
-class="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition">
-← Back to Campaigns
-</a>
+<x-admin.page-back :href="route('admin.campaigns.index')" label="Back to Campaigns" />
 
 <a
 href="{{ route('admin.adsets.create') }}"
@@ -177,7 +173,7 @@ ID: {{ $adset->id }}
 
 @if($adset->daily_budget)
 
-${{ number_format($adset->daily_budget, 2) }}
+${{ number_format($adset->daily_budget / 100, 2) }}
 
 <div class="text-xs text-gray-400">
 Daily Budget

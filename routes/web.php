@@ -13,15 +13,12 @@ use App\Http\Controllers\Auth\FacebookAuthController;
 use App\Http\Controllers\Admin\FaqController;
 use App\Http\Controllers\Admin\InboxController;
 use App\Http\Controllers\Admin\AdsManagerController;
-use App\Http\Controllers\Admin\UserController;
 
 /* CLIENT CONTROLLERS */
 
 use App\Http\Controllers\Client\{
     DashboardController,
     CampaignController,
-    ChatbotController,
-    TemplateController,
     ConversationController,
     BillingController,
     MetaConnectionController
@@ -38,7 +35,8 @@ use App\Http\Controllers\Admin\{
     AdSetController,
     AdController,
     AnalyticsController,
-    CreativeController
+    CreativeController,
+    UserController
 };
 
 
@@ -136,24 +134,6 @@ Route::middleware(['auth','verified','role:client'])
 
         /*
         |--------------------------------------------------------------------------
-        | CHATBOTS
-        |--------------------------------------------------------------------------
-        */
-
-        Route::resource('chatbots', ChatbotController::class);
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | WHATSAPP TEMPLATES
-        |--------------------------------------------------------------------------
-        */
-
-        Route::resource('templates', TemplateController::class);
-
-
-        /*
-        |--------------------------------------------------------------------------
         | CLIENT INBOX
         |--------------------------------------------------------------------------
         */
@@ -242,13 +222,6 @@ Route::middleware(['auth','verified','role:admin'])
     ->as('admin.')
     ->group(function () {
 
-/*
-|--------------------------------------------------------------------------
-| USER MANAGEMENT
-|--------------------------------------------------------------------------
-*/
-
-Route::resource('users', UserController::class)->names('users');
         /*
         |--------------------------------------------------------------------------
         | DASHBOARD
@@ -258,6 +231,13 @@ Route::resource('users', UserController::class)->names('users');
         Route::get('/dashboard',[AdminDashboardController::class,'index'])
             ->name('dashboard');
 
+        /*
+        |--------------------------------------------------------------------------
+        | USER MANAGEMENT (Settings area)
+        |--------------------------------------------------------------------------
+        */
+
+        Route::resource('users', UserController::class)->names('users');
 
         /*
         |--------------------------------------------------------------------------
@@ -324,20 +304,6 @@ Route::resource('users', UserController::class)->names('users');
                 Route::post('{conversation}/close','close')->name('close');
             });
 
-/*
-|--------------------------------------------------------------------------
-| AUTOMATION & CRM
-|--------------------------------------------------------------------------
-*/
-
-Route::resource('chatbots', \App\Http\Controllers\Admin\ChatbotController::class)
-    ->names('chatbots');
-
-Route::resource('templates', \App\Http\Controllers\Admin\TemplateController::class)
-    ->names('templates');
-
-Route::resource('leads', \App\Http\Controllers\Admin\LeadController::class)
-    ->names('leads');
         /*
         |--------------------------------------------------------------------------
         | META ADS SYSTEM

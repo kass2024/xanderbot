@@ -21,18 +21,10 @@ openAds: {{ str_contains($route,'admin.accounts')
 || str_contains($route,'admin.creatives')
 || str_contains($route,'admin.analytics') ? 'true' : 'false' }},
 
-openSocial: {{ str_contains($route,'admin.instagram')
-|| str_contains($route,'admin.messenger')
-|| str_contains($route,'admin.whatsapp') ? 'true' : 'false' }},
-
 openAutomation: {{ str_contains($route,'admin.inbox')
-|| str_contains($route,'admin.chatbots')
-|| str_contains($route,'admin.faq')
-|| str_contains($route,'admin.templates')
-|| str_contains($route,'admin.leads') ? 'true' : 'false' }},
+|| str_contains($route,'admin.faq') ? 'true' : 'false' }},
 
-openSettings: {{ str_contains($route,'admin.settings')
-|| str_contains($route,'admin.users') ? 'true' : 'false' }}
+openSettings: {{ str_contains($route,'admin.settings') || str_contains($route,'admin.users') ? 'true' : 'false' }}
 }"
 class="min-h-screen bg-gray-100 font-sans">
 
@@ -46,8 +38,8 @@ class="min-h-screen bg-gray-100 font-sans">
 {{-- LOGO --}}
 <div class="h-24 flex items-center px-8 border-b bg-gradient-to-r from-blue-600 to-indigo-600">
 <div>
-<h2 class="text-2xl font-bold text-white tracking-tight">MetaPanel</h2>
-<p class="text-sm text-blue-100 mt-1">Enterprise SaaS</p>
+<h2 class="text-2xl font-bold text-white tracking-tight">Xander Global Scholars</h2>
+<p class="text-sm text-blue-100 mt-1">Meta Ads &amp; conversations</p>
 </div>
 </div>
 
@@ -131,51 +123,6 @@ Insights & Reports
 
 
 
-{{-- SOCIAL CHANNELS --}}
-<div>
-
-<button @click="openSocial=!openSocial"
-class="w-full flex justify-between items-center px-4 py-3 rounded-xl font-semibold text-gray-800 hover:bg-gray-100">
-
-🌍 Social Channels
-
-<svg :class="openSocial ? 'rotate-90':''"
-class="w-4 h-4 transition-transform"
-fill="none"
-stroke="currentColor"
-stroke-width="2"
-viewBox="0 0 24 24">
-<path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
-</svg>
-
-</button>
-
-<div x-show="openSocial" x-transition class="pl-6 mt-2 space-y-2">
-
-@if(Route::has('admin.instagram.index'))
-<a href="{{ route('admin.instagram.index') }}"
-class="block py-2 px-3 rounded-lg hover:bg-gray-100">
-Instagram
-</a>
-@endif
-
-@if(Route::has('admin.messenger.index'))
-<a href="{{ route('admin.messenger.index') }}"
-class="block py-2 px-3 rounded-lg hover:bg-gray-100">
-Messenger
-</a>
-@endif
-
-@if(Route::has('admin.whatsapp.index'))
-<a href="{{ route('admin.whatsapp.index') }}"
-class="block py-2 px-3 rounded-lg hover:bg-gray-100">
-WhatsApp
-</a>
-@endif
-
-</div>
-</div>
-
 @endif
 
 
@@ -187,7 +134,7 @@ WhatsApp
 <button @click="openAutomation=!openAutomation"
 class="w-full flex justify-between items-center px-4 py-3 rounded-xl font-semibold text-gray-800 hover:bg-gray-100">
 
-🤖 Automation & CRM
+🤖 Inbox &amp; knowledge
 
 <svg :class="openAutomation ? 'rotate-90':''"
 class="w-4 h-4 transition-transform"
@@ -221,24 +168,9 @@ class="flex justify-between items-center py-2 px-3 rounded-lg hover:bg-gray-100"
 
 @if($isSuperAdmin)
 
-<a href="{{ route('admin.chatbots.index') }}"
-class="block py-2 px-3 rounded-lg hover:bg-gray-100">
-Chatbots
-</a>
-
 <a href="{{ route('admin.faq.index') }}"
 class="block py-2 px-3 rounded-lg hover:bg-gray-100">
 FAQ Knowledge Base
-</a>
-
-<a href="{{ route('admin.templates.index') }}"
-class="block py-2 px-3 rounded-lg hover:bg-gray-100">
-Templates
-</a>
-
-<a href="{{ route('admin.leads.index') }}"
-class="block py-2 px-3 rounded-lg hover:bg-gray-100">
-Leads CRM
 </a>
 
 @endif
@@ -248,14 +180,8 @@ Leads CRM
 
 
 
-{{-- SYSTEM + SETTINGS --}}
+{{-- SETTINGS --}}
 @if($isSuperAdmin)
-
-<a href="{{ route('admin.system.index') }}"
-class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-gray-100">
-🛠 System Monitor
-</a>
-
 
 <div>
 
@@ -309,7 +235,7 @@ User Management
 
 <div>
 <h1 class="text-3xl font-bold text-gray-900">
-Meta Enterprise Dashboard
+Xander Global Scholars — Admin
 </h1>
 
 <p class="text-sm text-gray-500 mt-2">

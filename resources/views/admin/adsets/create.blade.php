@@ -19,10 +19,7 @@ Meta validated audience configuration
 </p>
 </div>
 
-<a href="{{ route('admin.campaigns.index') }}"
-class="bg-gray-600 text-white px-4 py-3 rounded-xl hover:bg-gray-700">
-Back
-</a>
+<x-admin.page-back :href="route('admin.campaigns.index')" label="Back to Campaigns" />
 
 </div>
 
@@ -141,10 +138,12 @@ class="w-full border rounded-xl px-4 py-3"
 required>
 
 <option value="LINK_CLICKS">Link Clicks</option>
+<option value="LANDING_PAGE_VIEWS">Landing Page Views</option>
 <option value="REACH">Reach</option>
 <option value="IMPRESSIONS">Impressions</option>
 <option value="LEAD_GENERATION">Lead Generation</option>
 <option value="OFFSITE_CONVERSIONS">Conversions</option>
+<option value="POST_ENGAGEMENT">Post Engagement</option>
 
 </select>
 
@@ -159,19 +158,11 @@ required>
 Bid Strategy
 </label>
 
-<select
-name="bid_strategy"
-class="w-full border rounded-xl px-4 py-3">
+<input type="hidden" name="bid_strategy" value="LOWEST_COST_WITHOUT_CAP">
 
-<option value="LOWEST_COST_WITHOUT_CAP">
-Lowest Cost
-</option>
-
-<option value="LOWEST_COST_WITH_BID_CAP">
-Bid Cap
-</option>
-
-</select>
+<div class="w-full border rounded-xl px-4 py-3 bg-slate-50 text-slate-700 text-sm">
+Lowest cost without bid cap <span class="text-slate-500">(recommended — bid cap requires a bid amount in Meta)</span>
+</div>
 
 </div>
 
@@ -446,10 +437,15 @@ fetch("/admin/meta/interests?q="+query)
 const rules = {
 
 TRAFFIC: "LINK_CLICKS",
+OUTCOME_TRAFFIC: "LINK_CLICKS",
 AWARENESS: "REACH",
-ENGAGEMENT: "IMPRESSIONS",
+OUTCOME_AWARENESS: "REACH",
+ENGAGEMENT: "POST_ENGAGEMENT",
+OUTCOME_ENGAGEMENT: "POST_ENGAGEMENT",
 LEADS: "LEAD_GENERATION",
-SALES: "OFFSITE_CONVERSIONS"
+OUTCOME_LEADS: "LEAD_GENERATION",
+SALES: "OFFSITE_CONVERSIONS",
+OUTCOME_SALES: "OFFSITE_CONVERSIONS"
 
 };
 

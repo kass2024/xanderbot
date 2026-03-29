@@ -24,7 +24,7 @@ return [
     |--------------------------------------------------------------------------
     | After this time → return conversation to AI
     */
-    'bot_fallback_timeout' => env('CHAT_BOT_FALLBACK_TIMEOUT', 300),
+    'bot_fallback_timeout' => env('CHAT_BOT_FALLBACK_TIMEOUT', 900),
 
     /*
     |--------------------------------------------------------------------------
