@@ -46,6 +46,43 @@ class AdSetController extends Controller
         ]);
     }
 
+    /**
+     * Ad sets for a single campaign (route: admin.campaigns.adsets.index).
+     */
+    public function indexByCampaign(Campaign $campaign)
+    {
+        $campaignId = $campaign->id;
+
+        $adsets = AdSet::query()
+            ->where('campaign_id', $campaignId)
+            ->latest()
+            ->paginate(20);
+
+        $stats = [
+            'total' => AdSet::where('campaign_id', $campaignId)->count(),
+            'active' => AdSet::where('campaign_id', $campaignId)->where('status', 'ACTIVE')->count(),
+            'paused' => AdSet::where('campaign_id', $campaignId)->where('status', 'PAUSED')->count(),
+        ];
+
+        $totalBudgetCents = AdSet::where('campaign_id', $campaignId)->sum('daily_budget');
+        $totalBudget = ((float) $totalBudgetCents) / 100;
+
+        return view('admin.adsets.by-campaign', [
+            'campaign' => $campaign,
+            'adsets' => $adsets,
+            'stats' => $stats,
+            'totalBudget' => $totalBudget,
+        ]);
+    }
+
+    /**
+     * Resource route adsets.show — no dedicated page; send users to edit.
+     */
+    public function show(AdSet $adset)
+    {
+        return redirect()->route('admin.adsets.edit', $adset);
+    }
+
     /*
     |--------------------------------------------------------------------------
     | CREATE FORM
