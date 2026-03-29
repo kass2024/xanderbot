@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 
 class MetaWebhookController extends Controller
@@ -135,17 +136,48 @@ class MetaWebhookController extends Controller
             $payload = $this->extractInboundPayload($incoming);
 
             $text = $payload['text'] ?? '';
+            $inboundMediaUrl = null;
+            $inboundMediaType = null;
+            $inboundFilename = null;
+            $inboundDisplayContent = null;
+
+            $voiceFallbackInstruction = 'The user sent a voice message. Transcription was unavailable. Greet them briefly and ask them to type their question, or summarize common topics you can help with (visas, study abroad, etc.).';
 
             if ($text === '' && ! empty($payload['audio_media_id'])) {
-                if (config('chatbot.transcribe_inbound_audio', true)) {
-                    $text = $this->downloadAndTranscribeAudio($platform, $payload['audio_media_id']) ?? '';
-                }
-                if ($text === '') {
-                    Log::warning('Voice note could not be transcribed; using fallback text for bot', [
-                        'from' => $from,
-                        'media_id' => $payload['audio_media_id'],
-                    ]);
-                    $text = 'The user sent a voice message. Transcription was unavailable. Greet them briefly and ask them to type their question, or summarize common topics you can help with (visas, study abroad, etc.).';
+                $voiceNote = $this->processInboundVoiceNote($platform, $payload['audio_media_id']);
+                if ($voiceNote) {
+                    $inboundMediaUrl = $voiceNote['media_url'];
+                    $inboundMediaType = $voiceNote['media_type'];
+                    $inboundFilename = $voiceNote['filename'];
+                    $transcribed = trim((string) ($voiceNote['text'] ?? ''));
+                    if ($transcribed !== '') {
+                        $text = $transcribed;
+                        $inboundDisplayContent = $transcribed;
+                    } else {
+                        Log::warning('Voice note could not be transcribed; using fallback text for bot', [
+                            'from' => $from,
+                            'media_id' => $payload['audio_media_id'],
+                            'stored_url' => $inboundMediaUrl,
+                        ]);
+                        $text = $voiceFallbackInstruction;
+                        $inboundDisplayContent = '🎤 Voice note';
+                    }
+                } elseif (config('chatbot.transcribe_inbound_audio', true)) {
+                    $legacyText = trim((string) ($this->legacyTranscribeWithoutStorage($platform, $payload['audio_media_id']) ?? ''));
+                    if ($legacyText !== '') {
+                        $text = $legacyText;
+                        $inboundDisplayContent = $legacyText;
+                    } else {
+                        Log::warning('Voice note download/transcribe failed entirely', [
+                            'from' => $from,
+                            'media_id' => $payload['audio_media_id'],
+                        ]);
+                        $text = $voiceFallbackInstruction;
+                        $inboundDisplayContent = '🎤 Voice note';
+                    }
+                } else {
+                    $text = $voiceFallbackInstruction;
+                    $inboundDisplayContent = '🎤 Voice note';
                 }
             }
 
@@ -191,6 +223,10 @@ class MetaWebhookController extends Controller
                     'meta_adset_id' => $metaAdsetId,
                     'meta_ad_id' => $metaAdId,
                     'source' => $source,
+                    'inbound_media_url' => $inboundMediaUrl,
+                    'inbound_media_type' => $inboundMediaType,
+                    'inbound_filename' => $inboundFilename,
+                    'inbound_display_content' => $inboundDisplayContent,
                 ]);
 
                 if (empty($aiResponse) || empty($aiResponse['text'])) {
@@ -353,7 +389,12 @@ class MetaWebhookController extends Controller
         return $source !== '' && in_array($source, $allowed, true);
     }
 
-    protected function downloadAndTranscribeAudio(PlatformMetaConnection $platform, string $mediaId): ?string
+    /**
+     * Download WhatsApp voice/audio to a temp file. Caller must unlink path when done.
+     *
+     * @return array{path: string, mime: string, ext: string}|null
+     */
+    protected function fetchInboundAudioTemporaryFile(PlatformMetaConnection $platform, string $mediaId): ?array
     {
         $token = $this->dispatcher->accessTokenForPlatform($platform);
         if (! $token) {
@@ -437,9 +478,120 @@ class MetaWebhookController extends Controller
                 'bytes' => $bytes,
             ]);
 
-            $uploadName = 'voice.'.$ext;
+            return ['path' => $tmp, 'mime' => $mime, 'ext' => $ext];
+        } catch (\Throwable $e) {
+            Log::error('Audio download failed', ['error' => $e->getMessage()]);
+            Log::channel('voice')->error('Inbound transcribe: download exception', [
+                'media_id' => $mediaId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * Store inbound voice on public disk, transcribe for the AI, return URLs for the inbox UI.
+     *
+     * @return array{text: string, media_url: string, media_type: string, filename: string}|null
+     */
+    protected function processInboundVoiceNote(PlatformMetaConnection $platform, string $mediaId): ?array
+    {
+        $f = $this->fetchInboundAudioTemporaryFile($platform, $mediaId);
+        if (! $f) {
+            return null;
+        }
+
+        $tmp = $f['path'];
+        $ext = $f['ext'];
+        $bytes = @filesize($tmp) ?: 0;
+        $normalized = null;
+
+        try {
             $speech = app(SpeechService::class);
-            $text = $speech->transcribeFile($tmp, $uploadName);
+            $text = $speech->transcribeFile($tmp, 'voice.'.$ext) ?? '';
+
+            $normalized = app(WhatsAppAudioConverter::class)->toWhatsAppFormat($tmp);
+
+            if ($text === '' && $bytes > 0 && $normalized && is_file($normalized)) {
+                Log::channel('voice')->info('Inbound transcribe: retrying Whisper after ffmpeg normalize', [
+                    'media_id' => $mediaId,
+                    'converted' => basename($normalized),
+                ]);
+                $text = $speech->transcribeFile($normalized, basename($normalized)) ?? '';
+            } elseif ($text === '' && $bytes > 0) {
+                Log::channel('voice')->warning('Inbound transcribe: ffmpeg normalize skipped or failed', [
+                    'media_id' => $mediaId,
+                    'mime' => $f['mime'],
+                ]);
+            }
+
+            $sourceForPublic = ($normalized && is_file($normalized)) ? $normalized : $tmp;
+            $finalExt = strtolower(pathinfo($sourceForPublic, PATHINFO_EXTENSION) ?: $ext);
+            $relative = 'whatsapp/inbound/'.Str::uuid().'.'.$finalExt;
+
+            $raw = file_get_contents($sourceForPublic);
+            if ($raw === false || $raw === '') {
+                Log::channel('voice')->warning('Inbound voice: empty file after processing', ['media_id' => $mediaId]);
+                @unlink($tmp);
+                if ($normalized && is_file($normalized) && $normalized !== $tmp) {
+                    @unlink($normalized);
+                }
+
+                return null;
+            }
+
+            Storage::disk('public')->put($relative, $raw);
+            $publicUrl = URL::to(Storage::disk('public')->url($relative));
+
+            @unlink($tmp);
+            if ($normalized && is_file($normalized) && $normalized !== $tmp) {
+                @unlink($normalized);
+            }
+
+            Log::channel('voice')->info('Inbound voice stored for inbox', [
+                'media_id' => $mediaId,
+                'relative' => $relative,
+                'transcribed_chars' => strlen($text),
+            ]);
+
+            return [
+                'text' => $text,
+                'media_url' => $publicUrl,
+                'media_type' => 'audio',
+                'filename' => 'Voice note.'.$finalExt,
+            ];
+        } catch (\Throwable $e) {
+            Log::channel('voice')->error('processInboundVoiceNote failed', [
+                'media_id' => $mediaId,
+                'error' => $e->getMessage(),
+            ]);
+            @unlink($tmp);
+            if (is_string($normalized) && is_file($normalized) && $normalized !== $tmp) {
+                @unlink($normalized);
+            }
+
+            return null;
+        }
+    }
+
+    /**
+     * Transcribe only (no disk copy) — fallback if storing the file fails.
+     */
+    protected function legacyTranscribeWithoutStorage(PlatformMetaConnection $platform, string $mediaId): ?string
+    {
+        $f = $this->fetchInboundAudioTemporaryFile($platform, $mediaId);
+        if (! $f) {
+            return null;
+        }
+
+        $tmp = $f['path'];
+        $ext = $f['ext'];
+        $bytes = @filesize($tmp) ?: 0;
+
+        try {
+            $speech = app(SpeechService::class);
+            $text = $speech->transcribeFile($tmp, 'voice.'.$ext) ?? '';
 
             if (($text === null || $text === '') && $bytes > 0) {
                 $converted = app(WhatsAppAudioConverter::class)->toWhatsAppFormat($tmp);
@@ -453,20 +605,21 @@ class MetaWebhookController extends Controller
                 } else {
                     Log::channel('voice')->warning('Inbound transcribe: ffmpeg normalize skipped or failed', [
                         'media_id' => $mediaId,
-                        'mime' => $mime,
+                        'mime' => $f['mime'],
                     ]);
                 }
             }
 
             @unlink($tmp);
 
-            return $text;
+            return $text !== '' ? $text : null;
         } catch (\Throwable $e) {
             Log::error('Audio transcription pipeline failed', ['error' => $e->getMessage()]);
             Log::channel('voice')->error('Inbound transcribe: exception', [
                 'media_id' => $mediaId,
                 'error' => $e->getMessage(),
             ]);
+            @unlink($tmp);
 
             return null;
         }
