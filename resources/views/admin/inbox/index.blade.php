@@ -143,7 +143,7 @@
             </div>
 
             <div class="inbox-composer border-t p-2 sm:p-3">
-                <div id="composer-draft" class="mx-auto mb-2 hidden max-w-3xl rounded-xl border border-dashed px-3 py-2 inbox-draft-strip">
+                <div id="composer-draft" class="mx-auto mb-2 hidden max-w-3xl rounded-xl border border-dashed border-[var(--inbox-accent)]/50 bg-[var(--inbox-input-bg)] px-3 py-2.5 shadow-sm inbox-draft-strip">
                     <div class="flex items-center gap-2">
                         <span id="draft-icon" class="text-xl" aria-hidden="true">📎</span>
                         <div class="min-w-0 flex-1">
@@ -166,7 +166,8 @@
                     <div class="h-2 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
                         <div id="record-progress-fill" class="h-full rounded-full bg-red-500 transition-[width] duration-100 ease-linear" style="width:0%"></div>
                     </div>
-                    <p class="mt-1.5 text-[10px] opacity-80">Hold the mic, or click Stop when done — then press <strong>Send</strong>.</p>
+                    <div id="record-waveform" class="inbox-waveform mt-2 flex h-11 items-end justify-center gap-px overflow-hidden rounded-lg bg-black/10 px-1 py-1 dark:bg-white/10" aria-hidden="true"></div>
+                    <p class="mt-1.5 text-[10px] opacity-80">Hold the mic, or click <strong>Stop</strong> — preview appears above Send. Then press <strong>Send</strong>.</p>
                 </div>
 
                 <form id="reply-form" method="POST" action="{{ route('admin.inbox.reply', $activeConversation) }}" enctype="multipart/form-data" class="mx-auto flex max-w-3xl items-end gap-2">
@@ -322,6 +323,8 @@
 .inbox-composer-icon--recording { color: #ef4444 !important; animation: inbox-pulse 1s ease-in-out infinite; }
 @keyframes inbox-pulse { 50% { opacity: 0.65; } }
 .inbox-rec-dot { animation: inbox-pulse 1s ease-in-out infinite; }
+.inbox-waveform span { display: block; width: 3px; min-height: 3px; border-radius: 1px; background: rgba(239,68,68,0.85); align-self: flex-end; transition: height 0.05s linear; }
+.inbox-root[data-theme="light"] .inbox-waveform span { background: rgba(220,38,38,0.9); }
 </style>
 @endpush
 
@@ -440,19 +443,83 @@
     const recordTimer = document.getElementById('record-timer');
     const recordFill = document.getElementById('record-progress-fill');
     const recordStopBtn = document.getElementById('record-stop-btn');
+    const waveformEl = document.getElementById('record-waveform');
     const draftStrip = document.getElementById('composer-draft');
     const draftIcon = document.getElementById('draft-icon');
     const draftLabel = document.getElementById('draft-label');
     const draftName = document.getElementById('draft-name');
     const draftMeta = document.getElementById('draft-meta');
     const draftClear = document.getElementById('draft-clear');
+    const replyForm = document.getElementById('reply-form');
 
     let mediaRecorder = null;
     let chunks = [];
     let recordChunksInterval = null;
     let recordUiInterval = null;
     let recordStartedAt = 0;
+    let pendingVoiceBlob = null;
+    let waveRafId = null;
+    let audioContext = null;
+    let analyserNode = null;
     const RECORD_BAR_CAP_SEC = 120;
+    const WAVE_BAR_COUNT = 40;
+
+    function stopWaveform() {
+        if (waveRafId) {
+            cancelAnimationFrame(waveRafId);
+            waveRafId = null;
+        }
+        try {
+            if (audioContext && audioContext.state !== 'closed') {
+                audioContext.close();
+            }
+        } catch (e) {}
+        audioContext = null;
+        analyserNode = null;
+    }
+
+    function ensureWaveformBars() {
+        if (!waveformEl || waveformEl.dataset.built === '1') return;
+        waveformEl.innerHTML = '';
+        for (let i = 0; i < WAVE_BAR_COUNT; i++) {
+            const s = document.createElement('span');
+            s.style.height = '3px';
+            waveformEl.appendChild(s);
+        }
+        waveformEl.dataset.built = '1';
+    }
+
+    function startWaveform(stream) {
+        stopWaveform();
+        ensureWaveformBars();
+        if (!waveformEl) return;
+        try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return;
+            audioContext = new AC();
+            analyserNode = audioContext.createAnalyser();
+            analyserNode.fftSize = 256;
+            const src = audioContext.createMediaStreamSource(stream);
+            src.connect(analyserNode);
+            const buf = new Uint8Array(analyserNode.frequencyBinCount);
+            const bars = waveformEl.querySelectorAll('span');
+            const n = bars.length || 1;
+            function tick() {
+                if (!analyserNode) return;
+                analyserNode.getByteFrequencyData(buf);
+                const step = Math.max(1, Math.floor(buf.length / n));
+                for (let i = 0; i < n; i++) {
+                    let sum = 0;
+                    for (let j = 0; j < step; j++) sum += buf[Math.min(buf.length - 1, i * step + j)] || 0;
+                    const avg = sum / step;
+                    const h = Math.max(3, Math.min(42, avg * 1.35));
+                    bars[i].style.height = h + 'px';
+                }
+                waveRafId = requestAnimationFrame(tick);
+            }
+            audioContext.resume().then(function () { tick(); });
+        } catch (e) {}
+    }
 
     function showDraft(icon, label, name, meta) {
         if (!draftStrip) return;
@@ -471,12 +538,7 @@
         if (draftMeta) draftMeta.textContent = '';
     }
 
-    function updateDraftFromInput() {
-        const f = fileInput?.files?.[0];
-        if (!f) {
-            hideDraft();
-            return;
-        }
+    function describeFile(f) {
         const t = f.type || '';
         let icon = '📎';
         let label = 'Attachment';
@@ -485,11 +547,27 @@
         else if (t.startsWith('audio/')) { icon = '🎤'; label = 'Voice note'; }
         else if (t === 'application/pdf' || /\.pdf$/i.test(f.name)) { icon = '📄'; label = 'Document'; }
         const sz = f.size < 1024 ? f.size + ' B' : f.size < 1048576 ? (f.size / 1024).toFixed(1) + ' KB' : (f.size / 1048576).toFixed(1) + ' MB';
-        showDraft(icon, label, f.name, sz);
+        return { icon: icon, label: label, sz: sz };
     }
 
-    fileInput?.addEventListener('change', updateDraftFromInput);
+    function updateDraftFromInput() {
+        const f = fileInput?.files?.[0] || pendingVoiceBlob;
+        if (!f) {
+            hideDraft();
+            return;
+        }
+        const d = describeFile(f);
+        showDraft(d.icon, d.label, f.name, d.sz);
+    }
+
+    fileInput?.addEventListener('change', function () {
+        pendingVoiceBlob = null;
+        updateDraftFromInput();
+        try { fileInput.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+    });
+
     draftClear?.addEventListener('click', function () {
+        pendingVoiceBlob = null;
         if (fileInput) fileInput.value = '';
         hideDraft();
     });
@@ -509,6 +587,7 @@
     }
 
     function hideRecordUi() {
+        stopWaveform();
         recordPanel?.classList.add('hidden');
         micBtn?.classList.remove('inbox-composer-icon--recording');
         if (recordUiInterval) {
@@ -535,9 +614,11 @@
 
     async function startRec() {
         if (mediaRecorder) return;
+        pendingVoiceBlob = null;
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             chunks = [];
+            startWaveform(stream);
             const MR = window.MediaRecorder;
             const mime = MR.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : (MR.isTypeSupported('audio/webm') ? 'audio/webm' : '');
             mediaRecorder = mime ? new MR(stream, { mimeType: mime }) : new MR(stream);
@@ -546,12 +627,23 @@
                 hideRecordUi();
                 stream.getTracks().forEach(function (t) { t.stop(); });
                 const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-                const dt = new DataTransfer();
                 const ext = (blob.type || '').indexOf('mp4') >= 0 ? 'm4a' : 'webm';
-                dt.items.add(new File([blob], 'voice-note.' + ext, { type: blob.type || 'audio/webm' }));
-                if (fileInput) fileInput.files = dt.files;
-                const sec = (Date.now() - recordStartedAt) / 1000;
-                showDraft('🎤', 'Voice note (ready)', 'voice-note.' + ext, fmtDur(sec));
+                const voiceFile = new File([blob], 'voice-note.' + ext, { type: blob.type || 'audio/webm' });
+                pendingVoiceBlob = null;
+                if (fileInput) {
+                    try {
+                        const dt = new DataTransfer();
+                        dt.items.add(voiceFile);
+                        fileInput.files = dt.files;
+                    } catch (e) {}
+                }
+                if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+                    pendingVoiceBlob = voiceFile;
+                }
+                try {
+                    fileInput?.dispatchEvent(new Event('change', { bubbles: true }));
+                } catch (e) {}
+                updateDraftFromInput();
                 mediaRecorder = null;
             };
             showRecordUi();
@@ -566,6 +658,7 @@
                 }
             }, 1000);
         } catch (e) {
+            stopWaveform();
             hideRecordUi();
             alert('Microphone access denied or not available. Use HTTPS and allow the mic for this site.');
         }
@@ -581,8 +674,31 @@
         stopRec(true);
     });
 
-    document.getElementById('reply-form')?.addEventListener('submit', function () {
-        hideDraft();
+    replyForm?.addEventListener('submit', async function (e) {
+        if (!pendingVoiceBlob) return;
+        e.preventDefault();
+        const fd = new FormData(replyForm);
+        fd.delete('attachment');
+        fd.append('attachment', pendingVoiceBlob, pendingVoiceBlob.name || 'voice-note.webm');
+        try {
+            const res = await fetch(replyForm.action, {
+                method: 'POST',
+                body: fd,
+                credentials: 'same-origin',
+                headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html' },
+                redirect: 'follow'
+            });
+            pendingVoiceBlob = null;
+            if (fileInput) fileInput.value = '';
+            hideDraft();
+            if (res.ok) {
+                window.location.reload();
+            } else {
+                window.location.reload();
+            }
+        } catch (err) {
+            alert('Could not send the voice note. Check your connection and try again.');
+        }
     });
 })();
 @endif

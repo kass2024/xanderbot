@@ -129,8 +129,17 @@ class MetaWebhookController extends Controller
 
             $text = $payload['text'] ?? '';
 
-            if ($text === '' && ! empty($payload['audio_media_id']) && config('chatbot.transcribe_inbound_audio', true)) {
-                $text = $this->downloadAndTranscribeAudio($platform, $payload['audio_media_id']) ?? '';
+            if ($text === '' && ! empty($payload['audio_media_id'])) {
+                if (config('chatbot.transcribe_inbound_audio', true)) {
+                    $text = $this->downloadAndTranscribeAudio($platform, $payload['audio_media_id']) ?? '';
+                }
+                if ($text === '') {
+                    Log::warning('Voice note could not be transcribed; using fallback text for bot', [
+                        'from' => $from,
+                        'media_id' => $payload['audio_media_id'],
+                    ]);
+                    $text = 'The user sent a voice message. Transcription was unavailable. Greet them briefly and ask them to type their question, or summarize common topics you can help with (visas, study abroad, etc.).';
+                }
             }
 
             if ($text === '') {
@@ -177,7 +186,7 @@ class MetaWebhookController extends Controller
                 ]);
 
                 if (empty($aiResponse) || empty($aiResponse['text'])) {
-                    return;
+                    continue;
                 }
 
                 if (config('chatbot.voice_faq_replies') && $this->shouldAttachVoiceReply($aiResponse)) {
@@ -299,6 +308,12 @@ class MetaWebhookController extends Controller
             'audio' => [
                 'audio_media_id' => $incoming['audio']['id'] ?? null,
             ],
+            // Some payloads label voice distinctly; treat like audio.
+            'voice' => [
+                'audio_media_id' => is_array($incoming['voice'] ?? null)
+                    ? ($incoming['voice']['id'] ?? null)
+                    : null,
+            ],
             default => [],
         };
     }
@@ -320,11 +335,13 @@ class MetaWebhookController extends Controller
     {
         $token = $this->dispatcher->accessTokenForPlatform($platform);
         if (! $token) {
+            Log::warning('No access token for media download', ['platform_id' => $platform->id]);
+
             return null;
         }
 
         $base = rtrim((string) config('services.whatsapp.graph_url'), '/');
-        $version = config('services.whatsapp.graph_version');
+        $version = trim((string) config('services.whatsapp.graph_version'), '/');
 
         try {
             $metaResponse = Http::withToken($token)
@@ -332,32 +349,49 @@ class MetaWebhookController extends Controller
                 ->get("{$base}/{$version}/{$mediaId}");
 
             if ($metaResponse->failed()) {
-                Log::warning('WhatsApp media meta failed', ['status' => $metaResponse->status()]);
+                Log::warning('WhatsApp media meta failed', [
+                    'status' => $metaResponse->status(),
+                    'body' => $metaResponse->body(),
+                ]);
 
                 return null;
             }
 
+            $mime = (string) ($metaResponse->json('mime_type') ?? '');
             $mediaUrl = $metaResponse->json('url');
             if (! $mediaUrl) {
+                Log::warning('WhatsApp media meta missing url', ['json' => $metaResponse->json()]);
+
                 return null;
             }
 
+            $ext = match (true) {
+                str_contains($mime, 'ogg') => 'ogg',
+                str_contains($mime, 'opus') => 'ogg',
+                str_contains($mime, 'mpeg') || str_contains($mime, 'mp3') => 'mp3',
+                str_contains($mime, 'mp4') || str_contains($mime, 'm4a') || str_contains($mime, 'aac') => 'm4a',
+                str_contains($mime, 'webm') => 'webm',
+                str_contains($mime, 'wav') => 'wav',
+                default => 'ogg',
+            };
+
             $binary = Http::withToken($token)
-                ->timeout(90)
+                ->timeout(120)
                 ->get($mediaUrl);
 
             if ($binary->failed()) {
+                Log::warning('WhatsApp media binary download failed', ['status' => $binary->status()]);
+
                 return null;
             }
 
-            $tmp = tempnam(sys_get_temp_dir(), 'wa_audio_');
-            if ($tmp === false) {
+            $tmp = sys_get_temp_dir().'/wa_audio_'.uniqid('', true).'.'.$ext;
+            if (file_put_contents($tmp, $binary->body()) === false) {
                 return null;
             }
 
-            file_put_contents($tmp, $binary->body());
-
-            $text = app(SpeechService::class)->transcribeFile($tmp, 'voice.ogg');
+            $uploadName = 'voice.'.$ext;
+            $text = app(SpeechService::class)->transcribeFile($tmp, $uploadName);
 
             @unlink($tmp);
 
