@@ -3,17 +3,19 @@
 namespace App\Http\Controllers\Webhooks;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Cache;
-use Symfony\Component\HttpFoundation\Response;
-use App\Models\PlatformMetaConnection;
 use App\Models\Client;
 use App\Models\Message;
+use App\Models\PlatformMetaConnection;
 use App\Services\Chatbot\ChatbotProcessor;
 use App\Services\Chatbot\MessageDispatcher;
 use App\Services\Chatbot\SpeechService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
+use Symfony\Component\HttpFoundation\Response;
 
 class MetaWebhookController extends Controller
 {
@@ -29,8 +31,8 @@ class MetaWebhookController extends Controller
     */
     public function verify(Request $request): Response
     {
-        $mode      = $request->input('hub_mode') ?? $request->input('hub.mode');
-        $token     = $request->input('hub_verify_token') ?? $request->input('hub.verify_token');
+        $mode = $request->input('hub_mode') ?? $request->input('hub.mode');
+        $token = $request->input('hub_verify_token') ?? $request->input('hub.verify_token');
         $challenge = $request->input('hub_challenge') ?? $request->input('hub.challenge');
 
         if (
@@ -44,6 +46,7 @@ class MetaWebhookController extends Controller
         }
 
         Log::warning('Meta webhook verification failed');
+
         return response('Forbidden', 403);
     }
 
@@ -54,8 +57,9 @@ class MetaWebhookController extends Controller
     */
     public function handle(Request $request): Response
     {
-        if (!$this->isValidSignature($request)) {
+        if (! $this->isValidSignature($request)) {
             Log::warning('Invalid Meta webhook signature');
+
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -70,11 +74,11 @@ class MetaWebhookController extends Controller
 
                 $value = $change['value'] ?? [];
 
-                if (!empty($value['messages'])) {
+                if (! empty($value['messages'])) {
                     $this->handleIncomingMessages($value);
                 }
 
-                if (!empty($value['statuses'])) {
+                if (! empty($value['statuses'])) {
                     $this->handleStatusUpdates($value['statuses']);
                 }
             }
@@ -92,8 +96,9 @@ class MetaWebhookController extends Controller
     {
         $phoneNumberId = $value['metadata']['phone_number_id'] ?? null;
 
-        if (!$phoneNumberId) {
+        if (! $phoneNumberId) {
             Log::warning('Missing phone_number_id in webhook');
+
             return;
         }
 
@@ -102,22 +107,23 @@ class MetaWebhookController extends Controller
             $phoneNumberId
         )->first();
 
-        if (!$platform) {
+        if (! $platform) {
             Log::warning('Platform not found', ['phone_number_id' => $phoneNumberId]);
+
             return;
         }
 
         $clientId = $this->resolveClientId($platform);
-        if (!$clientId) {
+        if (! $clientId) {
             return;
         }
 
         foreach ($value['messages'] as $incoming) {
 
-            $from      = $incoming['from'] ?? null;
+            $from = $incoming['from'] ?? null;
             $messageId = $incoming['id'] ?? null;
 
-            if (!$from || !$messageId) {
+            if (! $from || ! $messageId) {
                 continue;
             }
 
@@ -144,6 +150,7 @@ class MetaWebhookController extends Controller
 
             if ($text === '') {
                 Log::info('Unsupported or empty inbound message', ['type' => $incoming['type'] ?? null]);
+
                 continue;
             }
 
@@ -155,34 +162,34 @@ class MetaWebhookController extends Controller
             $referral = $incoming['referral'] ?? null;
 
             $metaCampaignId = null;
-            $metaAdsetId    = null;
-            $metaAdId       = null;
-            $source         = 'organic';
+            $metaAdsetId = null;
+            $metaAdId = null;
+            $source = 'organic';
 
             if ($referral) {
                 $metaCampaignId = $referral['campaign_id'] ?? null;
-                $metaAdsetId    = $referral['adset_id'] ?? null;
-                $metaAdId       = $referral['ad_id'] ?? null;
-                $source         = 'paid';
+                $metaAdsetId = $referral['adset_id'] ?? null;
+                $metaAdId = $referral['ad_id'] ?? null;
+                $source = 'paid';
 
                 Log::info('Ad referral detected', [
                     'campaign_id' => $metaCampaignId,
-                    'adset_id'    => $metaAdsetId,
-                    'ad_id'       => $metaAdId,
+                    'adset_id' => $metaAdsetId,
+                    'ad_id' => $metaAdId,
                 ]);
             }
 
             try {
 
                 $aiResponse = $this->processor->process([
-                    'from'              => $from,
-                    'text'              => $text,
-                    'client_id'         => $clientId,
-                    'message_id'        => $messageId,
-                    'meta_campaign_id'  => $metaCampaignId,
-                    'meta_adset_id'     => $metaAdsetId,
-                    'meta_ad_id'        => $metaAdId,
-                    'source'            => $source,
+                    'from' => $from,
+                    'text' => $text,
+                    'client_id' => $clientId,
+                    'message_id' => $messageId,
+                    'meta_campaign_id' => $metaCampaignId,
+                    'meta_adset_id' => $metaAdsetId,
+                    'meta_ad_id' => $metaAdId,
+                    'source' => $source,
                 ]);
 
                 if (empty($aiResponse) || empty($aiResponse['text'])) {
@@ -190,10 +197,29 @@ class MetaWebhookController extends Controller
                 }
 
                 if (config('chatbot.voice_faq_replies') && $this->shouldAttachVoiceReply($aiResponse)) {
+                    Log::channel('voice')->info('Outbound TTS: attempting', [
+                        'source' => $aiResponse['source'] ?? null,
+                        'text_len' => strlen($aiResponse['text'] ?? ''),
+                    ]);
                     $path = app(SpeechService::class)->textToSpeechMp3($aiResponse['text']);
                     if ($path) {
-                        $aiResponse['voice_url'] = asset('storage/'.$path);
+                        $aiResponse['voice_url'] = URL::to(Storage::disk('public')->url($path));
+                        Log::channel('voice')->info('Outbound TTS: file ready', [
+                            'path' => $path,
+                            'voice_url' => $aiResponse['voice_url'],
+                        ]);
+                    } else {
+                        Log::channel('voice')->warning('Outbound TTS: SpeechService returned null (sending text only)', [
+                            'source' => $aiResponse['source'] ?? null,
+                        ]);
                     }
+                } elseif (config('chatbot.voice_faq_replies')) {
+                    Log::channel('voice')->debug('Outbound TTS: skipped for source', [
+                        'source' => $aiResponse['source'] ?? null,
+                        'allowed' => config('chatbot.voice_reply_sources', []),
+                    ]);
+                } else {
+                    Log::channel('voice')->debug('Outbound TTS: CHATBOT_VOICE_FAQ_REPLIES is false');
                 }
 
                 $results = $this->dispatcher->send(
@@ -208,7 +234,7 @@ class MetaWebhookController extends Controller
 
                 Log::error('Incoming message processing failed', [
                     'error' => $e->getMessage(),
-                    'from'  => $from,
+                    'from' => $from,
                 ]);
             }
         }
@@ -224,9 +250,9 @@ class MetaWebhookController extends Controller
         foreach ($statuses as $status) {
 
             $externalId = $status['id'] ?? null;
-            $delivery   = $status['status'] ?? null;
+            $delivery = $status['status'] ?? null;
 
-            if (!$externalId || !$delivery) {
+            if (! $externalId || ! $delivery) {
                 continue;
             }
 
@@ -235,7 +261,7 @@ class MetaWebhookController extends Controller
 
             Log::info('Message status updated', [
                 'external_id' => $externalId,
-                'status'      => $delivery
+                'status' => $delivery,
             ]);
         }
     }
@@ -249,14 +275,14 @@ class MetaWebhookController extends Controller
     {
         foreach ($results as $result) {
 
-            if (!empty($result['external_message_id'])) {
+            if (! empty($result['external_message_id'])) {
 
                 Message::whereNull('external_message_id')
                     ->latest('id')
                     ->limit(1)
                     ->update([
                         'external_message_id' => $result['external_message_id'],
-                        'status'              => 'sent'
+                        'status' => 'sent',
                     ]);
             }
         }
@@ -273,9 +299,9 @@ class MetaWebhookController extends Controller
 
         $clientId = Client::where('user_id', $userId)->value('id');
 
-        if (!$clientId) {
+        if (! $clientId) {
             Log::error('Client not found for platform', [
-                'platform_id' => $platform->id
+                'platform_id' => $platform->id,
             ]);
         }
 
@@ -320,15 +346,10 @@ class MetaWebhookController extends Controller
 
     protected function shouldAttachVoiceReply(array $aiResponse): bool
     {
-        $source = $aiResponse['source'] ?? '';
+        $source = (string) ($aiResponse['source'] ?? '');
+        $allowed = config('chatbot.voice_reply_sources', []);
 
-        return in_array($source, [
-            'direct_match',
-            'similar_question',
-            'keyword_match',
-            'faq_token_overlap',
-            'semantic_match',
-        ], true);
+        return $source !== '' && in_array($source, $allowed, true);
     }
 
     protected function downloadAndTranscribeAudio(PlatformMetaConnection $platform, string $mediaId): ?string
@@ -417,6 +438,7 @@ class MetaWebhookController extends Controller
         }
 
         Cache::put($key, true, now()->addMinutes(10));
+
         return false;
     }
 
@@ -429,17 +451,17 @@ class MetaWebhookController extends Controller
     {
         $signature = $request->header('X-Hub-Signature-256');
 
-        if (!$signature) {
+        if (! $signature) {
             return false;
         }
 
         $appSecret = config('services.whatsapp_webhook.app_secret');
 
-        if (!$appSecret) {
+        if (! $appSecret) {
             return false;
         }
 
-        $expected = 'sha256=' . hash_hmac(
+        $expected = 'sha256='.hash_hmac(
             'sha256',
             $request->getContent(),
             $appSecret

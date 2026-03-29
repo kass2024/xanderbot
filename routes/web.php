@@ -300,6 +300,7 @@ Route::middleware(['auth','verified','role:admin'])
 
                 Route::get('/','index')->name('index');
                 Route::get('{conversation}/messages', 'fetchMessages')->name('fetch');
+                Route::delete('{conversation}/messages/{message}', 'deleteMessage')->name('message.delete');
                 Route::post('{conversation}/reply','reply')->name('reply');
                 Route::post('{conversation}/toggle','toggle')->name('toggle');
                 Route::post('{conversation}/close','close')->name('close');

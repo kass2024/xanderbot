@@ -134,7 +134,8 @@
             </header>
 
             <div id="chatBox" class="inbox-chat-bg flex-1 overflow-y-auto px-3 py-4 sm:px-8"
-                 data-poll-url="{{ $pollUrl }}">
+                 data-poll-url="{{ $pollUrl }}"
+                 data-inbox-delete-base="{{ url('/admin/inbox/'.$activeConversation->id.'/messages') }}">
                 <div class="mx-auto max-w-3xl">
                     @foreach($activeConversation->messages as $message)
                         @include('admin.inbox.partials.message-bubble', ['message' => $message])
@@ -368,6 +369,8 @@
         const out = m.direction === 'outgoing';
         const align = out ? 'justify-end' : 'justify-start';
         const bubble = out ? 'inbox-bubble inbox-bubble--out' : 'inbox-bubble inbox-bubble--in';
+        const flexDir = out ? 'flex-row-reverse' : 'flex-row';
+        const popPos = out ? 'right-0' : 'left-0';
         const mt = (m.media_type || '').toLowerCase();
         let inner = '';
         if (mt === 'image' && m.media_url) {
@@ -395,11 +398,20 @@
             else if (m.status === 'sent') statusHtml = '<span class="opacity-60">✓</span>';
             if (m.source) statusHtml += ' <span class="opacity-60">· ' + escapeHtml(String(m.source).replace(/_/g, ' ')) + '</span>';
         }
-        return `<div class="inbox-msg-row flex ${align} mb-3" data-message-id="${m.id}"><div class="inbox-msg-col max-w-[min(100%,28rem)] sm:max-w-[min(100%,32rem)]"><div class="${bubble} shadow-sm">${inner}</div><div class="inbox-msg-meta mt-1 flex flex-wrap items-center gap-x-2 text-[11px] ${out ? 'justify-end' : 'justify-start'}"><span class="opacity-80">${escapeHtml(m.time || '')}</span>${statusHtml ? ' ' + statusHtml : ''}</div></div></div>`;
+        return `<div class="inbox-msg-row flex ${align} mb-3" data-message-id="${m.id}"><div class="inbox-msg-col max-w-[min(100%,28rem)] sm:max-w-[min(100%,32rem)]"><div class="flex items-start gap-1 ${flexDir}"><div class="inbox-msg-menu-wrap relative shrink-0 pt-1"><button type="button" class="inbox-msg-menu-btn rounded-md px-1 text-lg leading-none opacity-50 hover:opacity-100 inbox-text" aria-label="Message menu">⋮</button><div class="inbox-msg-popover absolute ${popPos} top-full z-30 mt-0.5 hidden min-w-[148px] rounded-lg border border-[var(--inbox-border)] bg-[var(--inbox-surface-strong)] py-1 text-sm shadow-lg" role="menu"><button type="button" class="inbox-msg-delete w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-black/10 dark:hover:bg-white/10" role="menuitem" data-message-id="${m.id}">Delete</button></div></div><div class="min-w-0 max-w-full flex-1"><div class="${bubble} shadow-sm">${inner}</div><div class="inbox-msg-meta mt-1 flex flex-wrap items-center gap-x-2 text-[11px] ${out ? 'justify-end' : 'justify-start'}"><span class="opacity-80">${escapeHtml(m.time || '')}</span>${statusHtml ? ' ' + statusHtml : ''}</div></div></div></div></div>`;
+    }
+
+    function csrfToken() {
+        return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     }
 
     function scrollBottom() {
-        chatBox.scrollTop = chatBox.scrollHeight;
+        requestAnimationFrame(function () {
+            chatBox.scrollTop = chatBox.scrollHeight;
+            requestAnimationFrame(function () {
+                chatBox.scrollTop = chatBox.scrollHeight;
+            });
+        });
     }
 
     let lastIds = new Set(@json($activeConversation->messages->pluck('id')->all()));
@@ -422,6 +434,13 @@
                 modeChip.className = 'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ' + (bot ? 'inbox-chip-bot' : 'inbox-chip-human');
             }
             const msgs = data.messages || [];
+            const serverIds = new Set(msgs.map(function (x) { return x.id; }));
+            for (const id of Array.from(lastIds)) {
+                if (!serverIds.has(id)) {
+                    chatBox.querySelector('[data-message-id="' + id + '"]')?.remove();
+                    lastIds.delete(id);
+                }
+            }
             let appended = false;
             for (const m of msgs) {
                 if (!lastIds.has(m.id)) {
@@ -434,8 +453,61 @@
         } catch (e) {}
     }
 
-    setInterval(poll, 4000);
+    setInterval(poll, 2000);
     scrollBottom();
+    window.addEventListener('load', function () { scrollBottom(); });
+
+    chatBox.addEventListener('click', function (e) {
+        const menuBtn = e.target.closest('.inbox-msg-menu-btn');
+        if (menuBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            const wrap = menuBtn.closest('.inbox-msg-menu-wrap');
+            const pop = wrap && wrap.querySelector('.inbox-msg-popover');
+            chatBox.querySelectorAll('.inbox-msg-popover').forEach(function (p) {
+                if (p !== pop) p.classList.add('hidden');
+            });
+            if (pop) pop.classList.toggle('hidden');
+            return;
+        }
+        const delBtn = e.target.closest('.inbox-msg-delete');
+        if (delBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            const id = parseInt(delBtn.getAttribute('data-message-id'), 10);
+            const base = chatBox.dataset.inboxDeleteBase;
+            if (!id || !base) return;
+            if (!confirm('Delete this message?')) return;
+            fetch(base + '/' + id, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken(),
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                credentials: 'same-origin',
+            }).then(function (res) {
+                if (res.ok) {
+                    chatBox.querySelector('[data-message-id="' + id + '"]')?.remove();
+                    lastIds.delete(id);
+                    return;
+                }
+                return res.json().then(function (j) {
+                    console.error('[inbox] delete failed', res.status, j);
+                    alert((j && j.message) || 'Could not delete message (' + res.status + '). Check storage/logs/voice.log');
+                });
+            }).catch(function (err) {
+                console.error('[inbox] delete', err);
+                alert('Could not delete message. See console.');
+            });
+        }
+    });
+
+    document.addEventListener('click', function (e) {
+        if (!e.target.closest('.inbox-msg-menu-wrap')) {
+            document.querySelectorAll('.inbox-msg-popover').forEach(function (p) { p.classList.add('hidden'); });
+        }
+    });
 
     const micBtn = document.getElementById('mic-btn');
     const fileInput = document.getElementById('attachment-input');
@@ -674,30 +746,52 @@
         stopRec(true);
     });
 
+    const messageInput = document.getElementById('message-input');
+
     replyForm?.addEventListener('submit', async function (e) {
-        if (!pendingVoiceBlob) return;
         e.preventDefault();
         const fd = new FormData(replyForm);
-        fd.delete('attachment');
-        fd.append('attachment', pendingVoiceBlob, pendingVoiceBlob.name || 'voice-note.webm');
+        if (pendingVoiceBlob) {
+            fd.delete('attachment');
+            fd.append('attachment', pendingVoiceBlob, pendingVoiceBlob.name || 'voice-note.webm');
+        }
+        const msg = (messageInput && messageInput.value ? messageInput.value : '').trim();
+        const hasFile = ((fileInput && fileInput.files && fileInput.files.length) || 0) > 0 || !!pendingVoiceBlob;
+        if (!msg && !hasFile) {
+            alert('Enter a message or attach a file.');
+            return;
+        }
         try {
             const res = await fetch(replyForm.action, {
                 method: 'POST',
                 body: fd,
                 credentials: 'same-origin',
-                headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html' },
-                redirect: 'follow'
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json',
+                },
             });
+            const data = await res.json().catch(function () { return {}; });
+            if (!res.ok) {
+                const errMsg = (data.errors && JSON.stringify(data.errors)) || data.message || ('HTTP ' + res.status);
+                console.error('[inbox] reply failed', res.status, data);
+                alert('Send failed: ' + errMsg + '. See storage/logs/voice.log for details.');
+                return;
+            }
             pendingVoiceBlob = null;
             if (fileInput) fileInput.value = '';
             hideDraft();
-            if (res.ok) {
-                window.location.reload();
-            } else {
-                window.location.reload();
+            if (messageInput) messageInput.value = '';
+            if (data.message) {
+                if (!lastIds.has(data.message.id)) {
+                    chatBox.querySelector('.max-w-3xl')?.insertAdjacentHTML('beforeend', renderMessage(data.message));
+                    lastIds.add(data.message.id);
+                }
+                scrollBottom();
             }
         } catch (err) {
-            alert('Could not send the voice note. Check your connection and try again.');
+            console.error('[inbox] reply', err);
+            alert('Could not send. Check connection. Details in console.');
         }
     });
 })();

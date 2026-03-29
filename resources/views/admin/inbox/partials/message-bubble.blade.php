@@ -8,6 +8,14 @@
 @endphp
 <div data-message-id="{{ $message->id }}" class="inbox-msg-row flex {{ $out ? 'justify-end' : 'justify-start' }} mb-3">
     <div class="inbox-msg-col max-w-[min(100%,28rem)] sm:max-w-[min(100%,32rem)]">
+        <div class="flex items-start gap-1 {{ $out ? 'flex-row-reverse' : 'flex-row' }}">
+            <div class="inbox-msg-menu-wrap relative shrink-0 pt-1">
+                <button type="button" class="inbox-msg-menu-btn rounded-md px-1 text-lg leading-none opacity-50 hover:opacity-100 inbox-text" aria-label="Message menu" aria-haspopup="true">⋮</button>
+                <div class="inbox-msg-popover absolute {{ $out ? 'right-0' : 'left-0' }} top-full z-30 mt-0.5 hidden min-w-[148px] rounded-lg border border-[var(--inbox-border)] bg-[var(--inbox-surface-strong)] py-1 text-sm shadow-lg" role="menu">
+                    <button type="button" class="inbox-msg-delete w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-black/10 dark:hover:bg-white/10" role="menuitem" data-message-id="{{ $message->id }}">Delete</button>
+                </div>
+            </div>
+            <div class="min-w-0 max-w-full flex-1">
         <div class="inbox-bubble {{ $out ? 'inbox-bubble--out' : 'inbox-bubble--in' }} shadow-sm">
             @if($mt === 'image' && $mu)
                 <a href="{{ $mu }}" target="_blank" rel="noopener" class="inbox-media-link mb-2 block overflow-hidden rounded-xl last:mb-0">
@@ -57,6 +65,8 @@
                     <span class="opacity-60">· {{ str_replace('_', ' ', $message->source) }}</span>
                 @endif
             @endif
+        </div>
+            </div>
         </div>
     </div>
 </div>
