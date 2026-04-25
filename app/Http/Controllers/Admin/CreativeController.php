@@ -257,10 +257,6 @@ class CreativeController extends Controller
 
             ];
 
-            if ($normalizedLanding !== null) {
-                $payload['object_url'] = $normalizedLanding;
-            }
-
             $instagramUserId = $this->meta->getConnectedInstagramUserId($data['page_id']);
             if ($instagramUserId !== null && $instagramUserId !== '') {
                 $payload['object_story_spec']['instagram_user_id'] = $instagramUserId;

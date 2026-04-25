@@ -254,13 +254,9 @@ protected function handleError($response, $endpoint, $payload = [])
     }
 
     /**
-     * Instagram user id linked to a Facebook Page (required in object_story_spec
-     * for many placements; missing it often contributes to ad creation failures).
-     */
-    /**
-     * Normalize and validate a website URL for Meta link / traffic creatives.
-     * Meta subcode 1815520 often means link_data.link is missing or treated as a Page-only URL;
-     * setting top-level object_url on the creative and a consistent https link helps.
+     * Normalize and validate a website URL for object_story_spec.link_data (and CTAs).
+     * Use https and a real site hostname; Meta 1815520 is often a bad or Page-only link.
+     * Do not send the same URL as top-level object_url with object_story_spec (Meta 1487929).
      */
     public function normalizeLandingUrlForMeta(string $url): string
     {
@@ -296,6 +292,9 @@ protected function handleError($response, $endpoint, $payload = [])
         return $url;
     }
 
+    /**
+     * Instagram user id linked to a Facebook Page (object_story_spec.instagram_user_id).
+     */
     public function getConnectedInstagramUserId(string $pageId): ?string
     {
         $pageId = trim($pageId);
@@ -656,10 +655,6 @@ if (!is_array($targeting)) {
             ),
         ];
 
-        if (! empty($data['object_url'])) {
-            $payload['object_url'] = $data['object_url'];
-        }
-
         Log::info('META_CREATIVE_PAYLOAD', $payload);
 
         return $this->post("{$accountId}/adcreatives", $payload);
@@ -699,19 +694,11 @@ public function createAd(string $accountId, array $data): array
     |--------------------------------------------------------------------------
     | BUILD PAYLOAD
     |--------------------------------------------------------------------------
-    | Meta requires the creative field to be JSON encoded
-    | and it must contain creative_id. For LINK_CLICKS ad sets, also pass
-    | object_url so Meta treats the destination as an external website (1815520).
+    | Meta requires the creative field to be JSON encoded with creative_id only.
+    | Do not add object_url here: Meta rejects creative_id + object_url (1487929)
+    | and rejects object_url + object_story_spec on adcreatives.
     |--------------------------------------------------------------------------
     */
-
-    $creativeNode = [
-        'creative_id' => (string) $data['creative']['id'],
-    ];
-
-    if (! empty($data['creative']['object_url'])) {
-        $creativeNode['object_url'] = $data['creative']['object_url'];
-    }
 
     $payload = [
 
@@ -721,7 +708,9 @@ public function createAd(string $accountId, array $data): array
 
         'status' => $data['status'] ?? 'PAUSED',
 
-        'creative' => json_encode($creativeNode, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
+        'creative' => json_encode([
+            'creative_id' => (string) $data['creative']['id'],
+        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
     ];
 
     /*

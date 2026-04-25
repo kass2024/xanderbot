@@ -232,11 +232,10 @@ $payload = [
     // Meta AdSet ID (not local id)
     'adset_id' => $adset->meta_id,
 
-    // Attach existing Meta creative (object_url helps Meta accept LINK_CLICKS ad sets — 1815520)
-    'creative' => array_merge(
-        ['id' => $creative->meta_id],
-        $this->metaCreativeObjectUrlForAdSet($creative, $adset)
-    ),
+    // Attach existing Meta creative (must not mix object_url with creative_id — Meta 1487929)
+    'creative' => [
+        'id' => $creative->meta_id,
+    ],
 
     // Delivery status (default paused for safety)
     'status' => $data['status'] ?? 'PAUSED'
@@ -1116,25 +1115,5 @@ public function live(): JsonResponse
         }
 
         $this->meta->normalizeLandingUrlForMeta($url);
-    }
-
-    /**
-     * @return array<string, string>
-     */
-    private function metaCreativeObjectUrlForAdSet(Creative $creative, AdSet $adset): array
-    {
-        $goal = strtoupper((string) ($adset->optimization_goal ?? ''));
-        if (! in_array($goal, ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'OFFSITE_CONVERSIONS'], true)) {
-            return [];
-        }
-
-        $raw = trim((string) ($creative->destination_url ?? ''));
-        if ($raw === '') {
-            return [];
-        }
-
-        return [
-            'object_url' => $this->meta->normalizeLandingUrlForMeta($raw),
-        ];
     }
 }
