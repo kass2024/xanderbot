@@ -241,6 +241,11 @@ $payload = [
 
 ];
 
+// Meta can require conversion_domain for website click ads; derive from creative URL.
+if (in_array(strtoupper((string) ($adset->optimization_goal ?? '')), ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'OFFSITE_CONVERSIONS'], true)) {
+    $payload['conversion_domain'] = $this->meta->conversionDomainFromUrl((string) $creative->destination_url);
+}
+
 /*
 |--------------------------------------------------------------------------
 | LOG META REQUEST

@@ -293,6 +293,24 @@ protected function handleError($response, $endpoint, $payload = [])
     }
 
     /**
+     * Derive conversion_domain (2nd+top-level) from a landing URL.
+     * Example: https://www.example.com/path -> example.com
+     */
+    public function conversionDomainFromUrl(string $url): string
+    {
+        $url = $this->normalizeLandingUrlForMeta($url);
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        $host = preg_replace('/^www\./i', '', $host);
+
+        $parts = array_values(array_filter(explode('.', (string) $host)));
+        if (count($parts) < 2) {
+            throw new Exception('Unable to derive conversion_domain from URL.');
+        }
+
+        return $parts[count($parts) - 2].'.'.$parts[count($parts) - 1];
+    }
+
+    /**
      * Instagram user id linked to a Facebook Page (object_story_spec.instagram_user_id).
      */
     public function getConnectedInstagramUserId(string $pageId): ?string
@@ -726,6 +744,10 @@ public function createAd(string $accountId, array $data): array
 
         'creative' => $creativeParam,
     ];
+
+    if (! empty($data['conversion_domain'])) {
+        $payload['conversion_domain'] = (string) $data['conversion_domain'];
+    }
 
     /*
     |--------------------------------------------------------------------------
