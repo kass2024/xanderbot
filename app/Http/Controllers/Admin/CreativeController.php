@@ -246,11 +246,16 @@ class CreativeController extends Controller
 
                     'page_id' => $data['page_id'],
 
-                    'link_data' => $linkData
+                    'link_data' => $linkData,
 
-                ]
+                ],
 
             ];
+
+            $instagramUserId = $this->meta->getConnectedInstagramUserId($data['page_id']);
+            if ($instagramUserId !== null && $instagramUserId !== '') {
+                $payload['object_story_spec']['instagram_user_id'] = $instagramUserId;
+            }
 
             Log::info('META_CREATIVE_PAYLOAD', $payload);
 

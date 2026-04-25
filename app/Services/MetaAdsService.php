@@ -2,9 +2,9 @@
 
 namespace App\Services;
 
+use Exception;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Exception;
 
 class MetaAdsService
 {
@@ -58,9 +58,16 @@ class MetaAdsService
 
     protected function client()
     {
-        return Http::timeout(30)
-            ->retry(3,500)
-            ->acceptJson();
+        /*
+        |--------------------------------------------------------------------------
+        | No Http::retry() here
+        |--------------------------------------------------------------------------
+        | Laravel's Http retry pipeline can call $response->throw() on non-2xx
+        | responses before they are returned, so MetaAdsService::request() never
+        | reaches handleError() and callers only see RequestException.
+        |--------------------------------------------------------------------------
+        */
+        return Http::timeout(30)->acceptJson();
     }
 
     /*
@@ -146,9 +153,14 @@ protected function handleError($response, $endpoint, $payload = [])
     {
         $payload['access_token'] = $this->accessToken;
 
+        $logPayload = $payload;
+        if (isset($logPayload['access_token'])) {
+            $logPayload['access_token'] = '[redacted]';
+        }
+
         Log::info("META_API_{$method}",[
             'endpoint'=>$endpoint,
-            'payload'=>$payload
+            'payload'=>$logPayload
         ]);
 
         $client = $this->client();
@@ -234,6 +246,37 @@ protected function handleError($response, $endpoint, $payload = [])
     {
         $res = $this->get('me/accounts');
         return $res['data'] ?? [];
+    }
+
+    /**
+     * Instagram user id linked to a Facebook Page (required in object_story_spec
+     * for many placements; missing it often contributes to ad creation failures).
+     */
+    public function getConnectedInstagramUserId(string $pageId): ?string
+    {
+        $pageId = trim($pageId);
+        if ($pageId === '') {
+            return null;
+        }
+
+        try {
+            $res = $this->get($pageId, [
+                'fields' => 'connected_instagram_account',
+            ]);
+
+            $account = $res['connected_instagram_account'] ?? null;
+
+            if (is_array($account) && ! empty($account['id'])) {
+                return (string) $account['id'];
+            }
+        } catch (Exception $e) {
+            Log::warning('META_PAGE_INSTAGRAM_LOOKUP_FAILED', [
+                'page_id' => $pageId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
     }
 
     /*

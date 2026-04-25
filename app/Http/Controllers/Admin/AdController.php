@@ -8,6 +8,7 @@ use App\Models\AdSet;
 use App\Models\Creative;
 use App\Services\MetaAdsService;
 
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -324,16 +325,34 @@ $ad = Ad::create([
 
             DB::rollBack();
 
+            $message = $e->getMessage();
+
+            if ($e instanceof RequestException && $e->response) {
+                $decoded = $e->response->json();
+                if (is_array($decoded) && isset($decoded['error']) && is_array($decoded['error'])) {
+                    $err = $decoded['error'];
+                    $parts = array_filter([
+                        $err['error_user_title'] ?? null,
+                        $err['error_user_msg'] ?? null,
+                        $err['message'] ?? null,
+                        isset($err['error_subcode']) ? '(Meta subcode '.$err['error_subcode'].')' : null,
+                    ]);
+                    if ($parts !== []) {
+                        $message = implode(' — ', $parts);
+                    }
+                }
+            }
+
             Log::error('AD_CREATION_FAILED', [
 
-                'error' => $e->getMessage()
+                'error' => $message,
 
             ]);
 
             return back()
                 ->withInput()
                 ->withErrors([
-                    'meta' => 'Ad creation failed: '.$e->getMessage()
+                    'meta' => 'Ad creation failed: '.$message,
                 ]);
         }
     }
