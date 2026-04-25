@@ -277,6 +277,24 @@ Log::info('META_AD_CREATE_REQUEST', [
                 $payload
             );
 
+            /*
+            |--------------------------------------------------------------------------
+            | Fallback: recreate creative on Meta then retry
+            |--------------------------------------------------------------------------
+            | Meta sometimes rejects ads referencing an existing creative_id with
+            | generic "Ad incomplete" (2446391) or "invalid link" (1815520) even
+            | when the creative exists. As a last resort, re-create the creative
+            | from our stored object_story_spec and retry once with the new id.
+            */
+            if (!isset($response['id']) && isset($response['error']['error_subcode'])) {
+                $subcode = (int) $response['error']['error_subcode'];
+                if (in_array($subcode, [1815520, 2446391], true)) {
+                    $newCreativeId = $this->recreateMetaCreativeForAd($accountId, $creative, $adset);
+                    $payload['creative'] = ['id' => $newCreativeId];
+                    $response = $this->meta->createAd($accountId, $payload);
+                }
+            }
+
 
             Log::info('META_AD_CREATE_RESPONSE', $response);
 
@@ -1184,5 +1202,57 @@ public function live(): JsonResponse
                 'object_story_spec' => $spec,
             ],
         ];
+    }
+
+    /**
+     * Recreate a Meta ad creative from our stored payload, for ad creation fallback.
+     */
+    private function recreateMetaCreativeForAd(string $accountId, Creative $creative, AdSet $adset): string
+    {
+        $payload = $creative->json_payload ?? [];
+        $spec = is_array($payload['object_story_spec'] ?? null) ? $payload['object_story_spec'] : null;
+
+        if (! is_array($spec) || empty($spec['page_id']) || empty($spec['link_data']) || ! is_array($spec['link_data'])) {
+            throw new Exception('Cannot recreate Meta creative: missing object_story_spec.');
+        }
+
+        $url = $this->meta->normalizeLandingUrlForMeta((string) ($creative->destination_url ?? ''));
+        $spec['link_data']['link'] = $url;
+        if (isset($spec['link_data']['call_to_action']['value']) && is_array($spec['link_data']['call_to_action']['value'])) {
+            $spec['link_data']['call_to_action']['value']['link'] = $url;
+        }
+
+        // Ensure ad set page identity.
+        if (! empty($adset->meta_id)) {
+            $metaAdSet = $this->meta->getAdSet((string) $adset->meta_id);
+            $po = $metaAdSet['promoted_object'] ?? null;
+            if (is_array($po) && ! empty($po['page_id'])) {
+                $spec['page_id'] = (string) $po['page_id'];
+            }
+        }
+
+        // Try to include IG identity.
+        if (empty($spec['instagram_user_id'])) {
+            $ig = $this->meta->getConnectedInstagramUserId((string) $spec['page_id']);
+            if (! empty($ig)) {
+                $spec['instagram_user_id'] = $ig;
+            }
+        }
+
+        $creativePayload = [
+            'name' => (string) ($creative->name ?? 'Creative'),
+            'object_story_spec' => $spec,
+        ];
+
+        $created = $this->meta->createCreative($accountId, $creativePayload);
+
+        if (empty($created['id'])) {
+            throw new Exception('Meta creative recreation failed.');
+        }
+
+        // Update local record so future ads use the working creative_id.
+        $creative->update(['meta_id' => (string) $created['id']]);
+
+        return (string) $created['id'];
     }
 }
