@@ -1152,6 +1152,17 @@ public function live(): JsonResponse
             $spec['link_data']['call_to_action']['value']['link'] = $url;
         }
 
+        // Ensure we use the same Page identity as the Ad Set's promoted_object (if set).
+        try {
+            $metaAdSet = $this->meta->getAdSet((string) $adset->meta_id);
+            $po = $metaAdSet['promoted_object'] ?? null;
+            if (is_array($po) && ! empty($po['page_id'])) {
+                $spec['page_id'] = (string) $po['page_id'];
+            }
+        } catch (Throwable $e) {
+            // ignore and proceed with stored page_id
+        }
+
         // Some placements (especially Instagram) require instagram_user_id on object_story_spec.
         if (empty($spec['instagram_user_id'])) {
             $ig = $this->meta->getConnectedInstagramUserId((string) $spec['page_id']);

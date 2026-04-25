@@ -838,6 +838,24 @@ public function getAdSets(string $accountId): array
     ]);
 }
 
+/**
+ * Get a single ad set with fields used for validation.
+ */
+public function getAdSet(string $adsetId): array
+{
+    return $this->get($adsetId, [
+        'fields' => implode(',', [
+            'id',
+            'name',
+            'status',
+            'optimization_goal',
+            'billing_event',
+            'promoted_object',
+            'targeting',
+        ]),
+    ]);
+}
+
 
 /*
 |--------------------------------------------------------------------------
