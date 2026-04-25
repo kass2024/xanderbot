@@ -94,6 +94,9 @@ protected function handleError($response, $endpoint, $payload = [])
 
     if (is_array($body) && isset($body['error']['message'])) {
         $message = $body['error']['message'];
+        if (! empty($body['error']['error_user_title'])) {
+            $message = $body['error']['error_user_title'] . ': ' . $message;
+        }
         if (! empty($body['error']['error_user_msg'])) {
             $message .= ' — ' . $body['error']['error_user_msg'];
         }
@@ -614,8 +617,8 @@ public function createAd(string $accountId, array $data): array
         'status' => $data['status'] ?? 'PAUSED',
 
         'creative' => json_encode([
-            'creative_id' => $data['creative']['id']
-        ])
+            'creative_id' => (string) $data['creative']['id'],
+        ], JSON_THROW_ON_ERROR)
     ];
 
     /*

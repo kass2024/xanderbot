@@ -183,6 +183,7 @@ public function index(): View
                 throw new Exception('Meta Ad Account not connected.');
             }
 
+            $this->assertCreativeEligibleForMetaAd($creative, $adset);
 
             /*
             |--------------------------------------------------------------------------
@@ -1055,4 +1056,60 @@ public function live(): JsonResponse
         'ads' => $ads
     ]);
 }
+
+    /**
+     * Meta subcode 1815520: invalid/missing link for LINK_CLICKS, LANDING_PAGE_VIEWS, etc.
+     * Creatives must belong to the same ad account as the ad set.
+     */
+    private function assertCreativeEligibleForMetaAd(Creative $creative, AdSet $adset): void
+    {
+        $creative->loadMissing('campaign');
+        $adset->loadMissing('campaign');
+
+        if (!$creative->campaign || !$adset->campaign) {
+            throw new Exception('Creative and ad set must both be linked to a campaign.');
+        }
+
+        if ((int) $creative->campaign->ad_account_id !== (int) $adset->campaign->ad_account_id) {
+            throw new Exception(
+                'This creative belongs to a different Meta ad account than the selected ad set. Choose a creative from the same campaign, or recreate the creative under that ad account.'
+            );
+        }
+
+        $goal = strtoupper((string) ($adset->optimization_goal ?? ''));
+
+        $goalsRequiringHttpsWebsite = [
+            'LINK_CLICKS',
+            'LANDING_PAGE_VIEWS',
+            'OFFSITE_CONVERSIONS',
+        ];
+
+        if (!in_array($goal, $goalsRequiringHttpsWebsite, true)) {
+            return;
+        }
+
+        $url = trim((string) ($creative->destination_url ?? ''));
+
+        if ($url === '') {
+            throw new Exception(
+                'This ad set optimizes for website visits or conversions. Edit the creative and set a live https:// destination URL on your site, then create the ad again. (Meta often returns subcode 1815520 when the link is missing or invalid.)'
+            );
+        }
+
+        if (!filter_var($url, FILTER_VALIDATE_URL)) {
+            throw new Exception('Creative destination URL is not a valid URL.');
+        }
+
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        if ($scheme !== 'https') {
+            throw new Exception('For this ad set optimization, the creative destination must use https://.');
+        }
+
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        if ($host === '' || str_ends_with($host, 'facebook.com') || str_contains($host, 'fb.com')) {
+            throw new Exception(
+                'For website traffic or conversion ad sets, the creative must link to your external website, not only a facebook.com address. (Meta subcode 1815520.)'
+            );
+        }
+    }
 }

@@ -42,7 +42,17 @@ class CreativeController extends Controller
             'creatives' => $creatives,
             'creativeStats' => [
                 'total' => Creative::count(),
-                'approved' => Creative::where('review_status', 'APPROVED')->count(),
+                // Match creatives/index.blade.php "Approved" badge: APPROVED or ACTIVE delivery, and not disapproved.
+                'approved' => Creative::query()
+                    ->where(function ($q) {
+                        $q->where('review_status', 'APPROVED')
+                            ->orWhere('effective_status', 'ACTIVE');
+                    })
+                    ->where(function ($q) {
+                        $q->whereNull('review_status')
+                            ->orWhere('review_status', '<>', 'DISAPPROVED');
+                    })
+                    ->count(),
                 'pending' => Creative::where('review_status', 'PENDING_REVIEW')->count(),
                 'rejected' => Creative::where('review_status', 'DISAPPROVED')->count(),
                 'active' => Creative::where('effective_status', 'ACTIVE')->count(),
@@ -106,6 +116,12 @@ class CreativeController extends Controller
             'status' => 'nullable|string'
 
         ]);
+
+        if ($request->boolean('sync_meta')) {
+            $request->validate([
+                'destination_url' => ['required', 'url', 'regex:/^https:\/\/.+/i'],
+            ]);
+        }
 
 
         DB::beginTransaction();
@@ -178,11 +194,20 @@ class CreativeController extends Controller
             |--------------------------------------------------------------------------
             | BUILD LINK DATA
             |--------------------------------------------------------------------------
+            | Meta rejects creatives used with LINK_CLICKS / LANDING_PAGE_VIEWS
+            | ad sets when link is missing, localhost, or not a real website (1815520).
+            |--------------------------------------------------------------------------
             */
+
+            $landingUrl = $data['destination_url'] ?? null;
+
+            if ($request->boolean('sync_meta') && empty($landingUrl)) {
+                throw new Exception('Destination URL is required when syncing a creative to Meta.');
+            }
 
             $linkData = [
 
-                'link' => $data['destination_url'] ?? config('app.url'),
+                'link' => $landingUrl ?? config('app.url'),
 
                 'message' => $data['body'] ?? '',
 
@@ -200,8 +225,8 @@ class CreativeController extends Controller
                     'type' => $data['call_to_action'],
 
                     'value' => [
-                        'link' => $data['destination_url']
-                    ]
+                        'link' => $landingUrl ?? $linkData['link'],
+                    ],
 
                 ];
             }
