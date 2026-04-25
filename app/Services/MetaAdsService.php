@@ -396,8 +396,7 @@ protected function buildTargeting(array $targeting): array
 
     /*
     |--------------------------------------------------------------------------
-    | Manual placements: Meta requires position arrays with publisher_platforms
-    | (omitting them often returns OAuthException 100 / subcode 1870247).
+    | Manual placements: Meta expects position arrays alongside publisher_platforms.
     |--------------------------------------------------------------------------
     */
 
@@ -415,6 +414,107 @@ protected function buildTargeting(array $targeting): array
 
     return $targeting;
 }
+
+    /**
+     * Meta subcode 1870247: some interest IDs were merged/deprecated. The error_user_msg
+     * includes "Relevant alternative options: [{...}]" — parse and return that list.
+     *
+     * @return list<array{deprecated_interest_id?:string,alternative_interest_id?:string,...}>
+     */
+    protected function parseInterestDeprecationAlternativesFromMessage(string $message): array
+    {
+        $marker = 'Relevant alternative options:';
+        $pos = stripos($message, $marker);
+        if ($pos === false) {
+            return [];
+        }
+
+        $start = strpos($message, '[', $pos);
+        if ($start === false) {
+            return [];
+        }
+
+        $depth = 0;
+        $len = strlen($message);
+        for ($i = $start; $i < $len; $i++) {
+            $c = $message[$i];
+            if ($c === '[') {
+                $depth++;
+            } elseif ($c === ']') {
+                $depth--;
+                if ($depth === 0) {
+                    $json = substr($message, $start, $i - $start + 1);
+                    $decoded = json_decode($json, true);
+
+                    return is_array($decoded) ? $decoded : [];
+                }
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Replace deprecated interest IDs in flexible_spec using Meta's suggested alternatives.
+     *
+     * @param  list<array<string, mixed>>  $alternatives
+     * @return array{0: array, 1: bool}  [patched targeting, whether any id changed]
+     */
+    protected function applyInterestDeprecationAlternatives(array $targeting, array $alternatives): array
+    {
+        $map = [];
+        foreach ($alternatives as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $dep = $row['deprecated_interest_id'] ?? null;
+            $alt = $row['alternative_interest_id'] ?? null;
+            if ($dep !== null && $dep !== '' && $alt !== null && $alt !== '') {
+                $map[(string) $dep] = (string) $alt;
+            }
+        }
+
+        if ($map === []) {
+            return [$targeting, false];
+        }
+
+        if (empty($targeting['flexible_spec']) || ! is_array($targeting['flexible_spec'])) {
+            return [$targeting, false];
+        }
+
+        $changed = false;
+        $out = $targeting;
+        foreach ($out['flexible_spec'] as &$group) {
+            if (! is_array($group) || empty($group['interests']) || ! is_array($group['interests'])) {
+                continue;
+            }
+            foreach ($group['interests'] as &$interest) {
+                $id = (string) ($interest['id'] ?? '');
+                if ($id !== '' && isset($map[$id])) {
+                    $interest['id'] = $map[$id];
+                    $changed = true;
+                }
+            }
+        }
+
+        return [$out, $changed];
+    }
+
+    /**
+     * When createAdSet fails with 1870247, call this with the same targeting and exception message
+     * to obtain an updated targeting array, or null if nothing could be applied.
+     */
+    public function patchTargetingFrom1870247Error(array $targeting, string $message): ?array
+    {
+        if (! preg_match('/\(Meta subcode\s+1870247\)/i', $message)) {
+            return null;
+        }
+
+        $alternatives = $this->parseInterestDeprecationAlternativesFromMessage($message);
+        [$patched, $changed] = $this->applyInterestDeprecationAlternatives($targeting, $alternatives);
+
+        return $changed ? $patched : null;
+    }
 
     /**
      * Add required placement positions when publisher_platforms is present.

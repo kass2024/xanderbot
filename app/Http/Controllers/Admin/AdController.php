@@ -278,12 +278,23 @@ Log::info('META_AD_CREATE_REQUEST', [
             } catch (Throwable $e) {
                 $subcode = $this->extractMetaSubcode($e);
 
-                // Meta sometimes returns generic 1815520/2446391 for otherwise valid creatives.
-                // Recreate the creative on Meta and retry once with the new creative_id.
-                if (in_array($subcode, [1815520, 2446391], true)) {
+                // Meta sometimes returns 1815520/2446391 for creatives that need a refresh, or
+                // 1487569 when the creative does not match the ad set's placements / identity.
+                // Recreate the creative on Meta and retry with the new creative_id.
+                if (in_array($subcode, [1815520, 2446391, 1487569], true)) {
                     $newCreativeId = $this->recreateMetaCreativeForAd($accountId, $creative, $adset);
                     $payload['creative'] = ['id' => $newCreativeId];
-                    $response = $this->meta->createAd($accountId, $payload);
+                    try {
+                        $response = $this->meta->createAd($accountId, $payload);
+                    } catch (Throwable $e2) {
+                        $subcode2 = $this->extractMetaSubcode($e2);
+                        if ($subcode2 === 1487569 && isset($payload['conversion_domain'])) {
+                            unset($payload['conversion_domain']);
+                            $response = $this->meta->createAd($accountId, $payload);
+                        } else {
+                            throw $e2;
+                        }
+                    }
                 } else {
                     throw $e;
                 }
@@ -1186,7 +1197,11 @@ public function live(): JsonResponse
 
     private function extractMetaSubcode(Throwable $e): ?int
     {
-        if (preg_match('/Meta subcode\\s+(\\d+)/', $e->getMessage(), $m)) {
+        $msg = $e->getMessage();
+        if (preg_match('/Meta subcode\\s+(\\d+)/i', $msg, $m)) {
+            return (int) $m[1];
+        }
+        if (preg_match('/error_subcode["\']?\\s*[:=]\\s*(\\d+)/i', $msg, $m)) {
             return (int) $m[1];
         }
 

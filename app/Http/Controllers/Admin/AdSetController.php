@@ -313,6 +313,8 @@ if (!empty($data['languages'])) {
 
                 $targeting['publisher_platforms'] =
                     $data['publisher_platforms'];
+
+                $targeting = $this->meta->enrichPlacementsForTargeting($targeting);
             }
 
             /*
@@ -354,12 +356,46 @@ if (!empty($data['languages'])) {
             |--------------------------------------------------------------------------
             | CREATE META ADSET
             |--------------------------------------------------------------------------
+            | Meta may reject interest IDs (subcode 1870247) when interests are merged
+            | or deprecated; the error lists alternatives — patch and retry a few times.
+            |--------------------------------------------------------------------------
             */
 
-            $response = $this->meta->createAdSet(
-                $accountId,
-                $payload
-            );
+            $targetingForMeta = $targeting;
+            $response = null;
+
+            for ($metaAttempt = 0; $metaAttempt < 5; $metaAttempt++) {
+                $payload['targeting'] = $targetingForMeta;
+
+                try {
+                    $response = $this->meta->createAdSet(
+                        $accountId,
+                        $payload
+                    );
+                    break;
+                } catch (Throwable $e) {
+                    if ($metaAttempt === 4) {
+                        throw $e;
+                    }
+
+                    $patched = $this->meta->patchTargetingFrom1870247Error(
+                        $targetingForMeta,
+                        $e->getMessage()
+                    );
+
+                    if ($patched === null) {
+                        throw $e;
+                    }
+
+                    $targetingForMeta = $patched;
+
+                    Log::info('META_ADSET_1870247_PATCH_RETRY', [
+                        'attempt' => $metaAttempt + 1,
+                    ]);
+                }
+            }
+
+            $targeting = $targetingForMeta;
 
             Log::info('META_ADSET_RESPONSE', $response);
 
