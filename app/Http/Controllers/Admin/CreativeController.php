@@ -119,7 +119,7 @@ class CreativeController extends Controller
 
         if ($request->boolean('sync_meta')) {
             $request->validate([
-                'destination_url' => ['required', 'url', 'regex:/^https:\/\/.+/i'],
+                'destination_url' => ['required', 'string', 'max:2048'],
             ]);
         }
 
@@ -201,19 +201,24 @@ class CreativeController extends Controller
 
             $landingUrl = $data['destination_url'] ?? null;
 
-            if ($request->boolean('sync_meta') && empty($landingUrl)) {
-                throw new Exception('Destination URL is required when syncing a creative to Meta.');
+            $normalizedLanding = null;
+
+            if ($request->boolean('sync_meta')) {
+                if (empty($landingUrl)) {
+                    throw new Exception('Destination URL is required when syncing a creative to Meta.');
+                }
+                $normalizedLanding = $this->meta->normalizeLandingUrlForMeta($landingUrl);
             }
 
             $linkData = [
 
-                'link' => $landingUrl ?? config('app.url'),
+                'link' => $normalizedLanding ?? ($landingUrl ?? config('app.url')),
 
                 'message' => $data['body'] ?? '',
 
                 'name' => $data['headline'] ?? $data['name'],
 
-                'image_hash' => $imageHash
+                'image_hash' => $imageHash,
 
             ];
 
@@ -225,7 +230,7 @@ class CreativeController extends Controller
                     'type' => $data['call_to_action'],
 
                     'value' => [
-                        'link' => $landingUrl ?? $linkData['link'],
+                        'link' => $normalizedLanding ?? ($landingUrl ?? $linkData['link']),
                     ],
 
                 ];
@@ -251,6 +256,10 @@ class CreativeController extends Controller
                 ],
 
             ];
+
+            if ($normalizedLanding !== null) {
+                $payload['object_url'] = $normalizedLanding;
+            }
 
             $instagramUserId = $this->meta->getConnectedInstagramUserId($data['page_id']);
             if ($instagramUserId !== null && $instagramUserId !== '') {

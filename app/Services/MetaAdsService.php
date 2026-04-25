@@ -118,13 +118,18 @@ protected function handleError($response, $endpoint, $payload = [])
     |--------------------------------------------------------------------------
     */
 
+    $safePayload = $payload;
+    if (isset($safePayload['access_token'])) {
+        $safePayload['access_token'] = '[redacted]';
+    }
+
     Log::error('META_API_ERROR', [
 
         'endpoint' => $endpoint,
 
         'http_status' => $response->status(),
 
-        'payload' => $payload,
+        'payload' => $safePayload,
 
         'response' => $body,
 
@@ -252,6 +257,45 @@ protected function handleError($response, $endpoint, $payload = [])
      * Instagram user id linked to a Facebook Page (required in object_story_spec
      * for many placements; missing it often contributes to ad creation failures).
      */
+    /**
+     * Normalize and validate a website URL for Meta link / traffic creatives.
+     * Meta subcode 1815520 often means link_data.link is missing or treated as a Page-only URL;
+     * setting top-level object_url on the creative and a consistent https link helps.
+     */
+    public function normalizeLandingUrlForMeta(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            throw new Exception('Website URL is empty.');
+        }
+
+        if (! preg_match('#^https?://#i', $url)) {
+            $url = 'https://'.ltrim($url, '/');
+        }
+
+        $url = preg_replace('#^http://#i', 'https://', $url, 1);
+
+        $parts = parse_url($url);
+        $host = strtolower((string) ($parts['host'] ?? ''));
+
+        if ($host === '' || ! str_contains($host, '.')) {
+            throw new Exception('Website URL must be a valid hostname (e.g. https://www.example.com/path).');
+        }
+
+        $blocked = ['facebook.com', 'fb.com', 'fb.me', 'messenger.com'];
+        foreach ($blocked as $b) {
+            if ($host === $b || str_ends_with($host, '.'.$b)) {
+                throw new Exception('Use your own website as the destination, not '.$b.'.');
+            }
+        }
+
+        if (strtolower((string) ($parts['scheme'] ?? '')) !== 'https') {
+            throw new Exception('Website URL must use https://.');
+        }
+
+        return $url;
+    }
+
     public function getConnectedInstagramUserId(string $pageId): ?string
     {
         $pageId = trim($pageId);
@@ -596,21 +640,29 @@ if (!is_array($targeting)) {
     |--------------------------------------------------------------------------
     */
 
-    public function createCreative(string $accountId,array $data):array
+    public function createCreative(string $accountId, array $data): array
     {
         $accountId = $this->formatAccount($accountId);
 
-        $payload = [
+        if (empty($data['object_story_spec']) || ! is_array($data['object_story_spec'])) {
+            throw new Exception('object_story_spec is required to create a Meta creative.');
+        }
 
-            'name'=>$data['name'],
-'object_story_spec' => json_encode(
-    array_filter($data['object_story_spec'])
-)
+        $payload = [
+            'name' => $data['name'],
+            'object_story_spec' => json_encode(
+                $data['object_story_spec'],
+                JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+            ),
         ];
 
-        Log::info('META_CREATIVE_PAYLOAD',$payload);
+        if (! empty($data['object_url'])) {
+            $payload['object_url'] = $data['object_url'];
+        }
 
-        return $this->post("{$accountId}/adcreatives",$payload);
+        Log::info('META_CREATIVE_PAYLOAD', $payload);
+
+        return $this->post("{$accountId}/adcreatives", $payload);
     }
 
   
@@ -648,8 +700,18 @@ public function createAd(string $accountId, array $data): array
     | BUILD PAYLOAD
     |--------------------------------------------------------------------------
     | Meta requires the creative field to be JSON encoded
-    | and it must contain creative_id
+    | and it must contain creative_id. For LINK_CLICKS ad sets, also pass
+    | object_url so Meta treats the destination as an external website (1815520).
+    |--------------------------------------------------------------------------
     */
+
+    $creativeNode = [
+        'creative_id' => (string) $data['creative']['id'],
+    ];
+
+    if (! empty($data['creative']['object_url'])) {
+        $creativeNode['object_url'] = $data['creative']['object_url'];
+    }
 
     $payload = [
 
@@ -659,9 +721,7 @@ public function createAd(string $accountId, array $data): array
 
         'status' => $data['status'] ?? 'PAUSED',
 
-        'creative' => json_encode([
-            'creative_id' => (string) $data['creative']['id'],
-        ], JSON_THROW_ON_ERROR)
+        'creative' => json_encode($creativeNode, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
     ];
 
     /*

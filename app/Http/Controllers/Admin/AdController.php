@@ -232,10 +232,11 @@ $payload = [
     // Meta AdSet ID (not local id)
     'adset_id' => $adset->meta_id,
 
-    // Attach existing Meta creative
-    'creative' => [
-        'id' => $creative->meta_id
-    ],
+    // Attach existing Meta creative (object_url helps Meta accept LINK_CLICKS ad sets — 1815520)
+    'creative' => array_merge(
+        ['id' => $creative->meta_id],
+        $this->metaCreativeObjectUrlForAdSet($creative, $adset)
+    ),
 
     // Delivery status (default paused for safety)
     'status' => $data['status'] ?? 'PAUSED'
@@ -1108,27 +1109,32 @@ public function live(): JsonResponse
         }
 
         $url = trim((string) ($creative->destination_url ?? ''));
-
         if ($url === '') {
             throw new Exception(
-                'This ad set optimizes for website visits or conversions. Edit the creative and set a live https:// destination URL on your site, then create the ad again. (Meta often returns subcode 1815520 when the link is missing or invalid.)'
+                'This ad set optimizes for website visits or conversions. Edit the creative and set your website URL (https://…), then create the ad again. (Meta subcode 1815520.)'
             );
         }
 
-        if (!filter_var($url, FILTER_VALIDATE_URL)) {
-            throw new Exception('Creative destination URL is not a valid URL.');
+        $this->meta->normalizeLandingUrlForMeta($url);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function metaCreativeObjectUrlForAdSet(Creative $creative, AdSet $adset): array
+    {
+        $goal = strtoupper((string) ($adset->optimization_goal ?? ''));
+        if (! in_array($goal, ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'OFFSITE_CONVERSIONS'], true)) {
+            return [];
         }
 
-        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
-        if ($scheme !== 'https') {
-            throw new Exception('For this ad set optimization, the creative destination must use https://.');
+        $raw = trim((string) ($creative->destination_url ?? ''));
+        if ($raw === '') {
+            return [];
         }
 
-        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
-        if ($host === '' || str_ends_with($host, 'facebook.com') || str_contains($host, 'fb.com')) {
-            throw new Exception(
-                'For website traffic or conversion ad sets, the creative must link to your external website, not only a facebook.com address. (Meta subcode 1815520.)'
-            );
-        }
+        return [
+            'object_url' => $this->meta->normalizeLandingUrlForMeta($raw),
+        ];
     }
 }
