@@ -1004,7 +1004,7 @@ public function getAd(string $adId): array
 | GET INSIGHTS
 |--------------------------------------------------------------------------
 */
-public function getInsights(string $objectId, string $preset = 'lifetime', array $extra = []): array
+public function getInsights(string $objectId, string $preset = 'maximum', array $extra = []): array
 {
     /*
     |--------------------------------------------------------------------------
