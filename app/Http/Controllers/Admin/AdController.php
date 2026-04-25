@@ -232,10 +232,9 @@ $payload = [
     // Meta AdSet ID (not local id)
     'adset_id' => $adset->meta_id,
 
-    // Attach existing Meta creative (must not mix object_url with creative_id — Meta 1487929)
-    'creative' => [
-        'id' => $creative->meta_id,
-    ],
+    // Use inline creative spec to avoid Meta 1815520 on LINK_CLICKS.
+    // Meta allows passing either creative_id or a creative spec.
+    'creative' => $this->buildMetaCreativeForAd($creative, $adset),
 
     // Delivery status (default paused for safety)
     'status' => $data['status'] ?? 'PAUSED'
@@ -1115,5 +1114,44 @@ public function live(): JsonResponse
         }
 
         $this->meta->normalizeLandingUrlForMeta($url);
+    }
+
+    /**
+     * Build the "creative" node for ad creation.
+     * Prefer an inline creative spec for link-click optimized ad sets, since Meta can
+     * still return subcode 1815520 when referencing a creative_id that exists.
+     *
+     * @return array<string, mixed>
+     */
+    private function buildMetaCreativeForAd(Creative $creative, AdSet $adset): array
+    {
+        $goal = strtoupper((string) ($adset->optimization_goal ?? ''));
+        $shouldInline = in_array($goal, ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'OFFSITE_CONVERSIONS'], true);
+
+        if (! $shouldInline) {
+            return ['id' => $creative->meta_id];
+        }
+
+        $payload = $creative->json_payload ?? [];
+        $spec = is_array($payload['object_story_spec'] ?? null) ? $payload['object_story_spec'] : null;
+
+        // If we don't have a usable spec, fall back to creative_id.
+        if (! is_array($spec) || empty($spec['page_id']) || empty($spec['link_data']) || ! is_array($spec['link_data'])) {
+            return ['id' => $creative->meta_id];
+        }
+
+        // Force the current website URL into the spec.
+        $url = $this->meta->normalizeLandingUrlForMeta((string) ($creative->destination_url ?? ''));
+        $spec['link_data']['link'] = $url;
+        if (isset($spec['link_data']['call_to_action']['value']) && is_array($spec['link_data']['call_to_action']['value'])) {
+            $spec['link_data']['call_to_action']['value']['link'] = $url;
+        }
+
+        return [
+            'spec' => [
+                'name' => (string) ($creative->name ?? 'Link Ad Creative'),
+                'object_story_spec' => $spec,
+            ],
+        ];
     }
 }

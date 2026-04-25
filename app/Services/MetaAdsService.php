@@ -686,19 +686,35 @@ public function createAd(string $accountId, array $data): array
         throw new Exception('adset_id is required');
     }
 
-    if (empty($data['creative']['id'])) {
-        throw new Exception('creative id is required');
+    if (empty($data['creative']['id']) && empty($data['creative']['spec'])) {
+        throw new Exception('creative id or creative spec is required');
     }
 
     /*
     |--------------------------------------------------------------------------
     | BUILD PAYLOAD
     |--------------------------------------------------------------------------
-    | Meta requires the creative field to be JSON encoded with creative_id only.
-    | Do not add object_url here: Meta rejects creative_id + object_url (1487929)
-    | and rejects object_url + object_story_spec on adcreatives.
+    | Meta requires the creative field to be JSON encoded.
+    | It can be either:
+    | - {"creative_id":"<ID>"} OR
+    | - {"creative": { ...creative spec... }}
+    |
+    | We support both so we can inline a link creative when Meta rejects an
+    | existing creative_id for LINK_CLICKS optimization (subcode 1815520).
     |--------------------------------------------------------------------------
     */
+
+    $creativeParam = null;
+
+    if (! empty($data['creative']['spec']) && is_array($data['creative']['spec'])) {
+        $creativeParam = json_encode([
+            'creative' => $data['creative']['spec'],
+        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    } else {
+        $creativeParam = json_encode([
+            'creative_id' => (string) $data['creative']['id'],
+        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    }
 
     $payload = [
 
@@ -708,9 +724,7 @@ public function createAd(string $accountId, array $data): array
 
         'status' => $data['status'] ?? 'PAUSED',
 
-        'creative' => json_encode([
-            'creative_id' => (string) $data['creative']['id'],
-        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
+        'creative' => $creativeParam,
     ];
 
     /*
