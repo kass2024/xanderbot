@@ -152,12 +152,30 @@ class SyncMetaAds extends Command
                     | 🔥 ALWAYS UPDATE (NO STALE DATA)
                     |----------------------------------------------
                     */
+                    $effective = (string) ($metaAd['effective_status'] ?? '');
+                    $review = $metaAd['ad_review_feedback'] ?? null;
+                    $reviewText = null;
+                    if (is_string($review) && $review !== '') {
+                        $reviewText = $review;
+                    } elseif (is_array($review) && $review !== []) {
+                        $reviewText = json_encode($review, JSON_UNESCAPED_SLASHES);
+                    }
+
+                    $pauseReason = null;
+                    if ($effective !== '' && strtoupper($effective) !== 'ACTIVE') {
+                        $pauseReason = $effective;
+                        if ($reviewText) {
+                            $pauseReason .= ' — ' . $reviewText;
+                        }
+                    }
+
                     $ad = Ad::updateOrCreate(
                         ['meta_ad_id' => $metaAdId],
                         [
                             'adset_id' => $adsetId,
                             'name' => $metaAd['name'],
-                            'status' => $metaAd['status'] ?? 'ACTIVE'
+                            'status' => $metaAd['status'] ?? 'ACTIVE',
+                            'pause_reason' => $pauseReason,
                         ]
                     );
 
