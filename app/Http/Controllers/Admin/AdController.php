@@ -232,9 +232,10 @@ $payload = [
     // Meta AdSet ID (not local id)
     'adset_id' => $adset->meta_id,
 
-    // Use inline creative spec to avoid Meta 1815520 on LINK_CLICKS.
-    // Meta allows passing either creative_id or a creative spec.
-    'creative' => $this->buildMetaCreativeForAd($creative, $adset),
+    // Attach existing Meta creative (Meta expects creative_id only here)
+    'creative' => [
+        'id' => $creative->meta_id,
+    ],
 
     // Delivery status (default paused for safety)
     'status' => $data['status'] ?? 'PAUSED'
@@ -272,29 +273,21 @@ Log::info('META_AD_CREATE_REQUEST', [
             |--------------------------------------------------------------------------
             */
 
-            $response = $this->meta->createAd(
-                $accountId,
-                $payload
-            );
+            try {
+                $response = $this->meta->createAd($accountId, $payload);
+            } catch (Throwable $e) {
+                $subcode = $this->extractMetaSubcode($e);
 
-            /*
-            |--------------------------------------------------------------------------
-            | Fallback: recreate creative on Meta then retry
-            |--------------------------------------------------------------------------
-            | Meta sometimes rejects ads referencing an existing creative_id with
-            | generic "Ad incomplete" (2446391) or "invalid link" (1815520) even
-            | when the creative exists. As a last resort, re-create the creative
-            | from our stored object_story_spec and retry once with the new id.
-            */
-            if (!isset($response['id']) && isset($response['error']['error_subcode'])) {
-                $subcode = (int) $response['error']['error_subcode'];
+                // Meta sometimes returns generic 1815520/2446391 for otherwise valid creatives.
+                // Recreate the creative on Meta and retry once with the new creative_id.
                 if (in_array($subcode, [1815520, 2446391], true)) {
                     $newCreativeId = $this->recreateMetaCreativeForAd($accountId, $creative, $adset);
                     $payload['creative'] = ['id' => $newCreativeId];
                     $response = $this->meta->createAd($accountId, $payload);
+                } else {
+                    throw $e;
                 }
             }
-
 
             Log::info('META_AD_CREATE_RESPONSE', $response);
 
@@ -1140,71 +1133,6 @@ public function live(): JsonResponse
     }
 
     /**
-     * Build the "creative" node for ad creation.
-     * Prefer an inline creative spec for link-click optimized ad sets, since Meta can
-     * still return subcode 1815520 when referencing a creative_id that exists.
-     *
-     * @return array<string, mixed>
-     */
-    private function buildMetaCreativeForAd(Creative $creative, AdSet $adset): array
-    {
-        $goal = strtoupper((string) ($adset->optimization_goal ?? ''));
-        $shouldInline = in_array($goal, ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'OFFSITE_CONVERSIONS'], true);
-
-        if (! $shouldInline) {
-            return ['id' => $creative->meta_id];
-        }
-
-        $payload = $creative->json_payload ?? [];
-        $spec = is_array($payload['object_story_spec'] ?? null) ? $payload['object_story_spec'] : null;
-
-        // If we don't have a usable spec, fall back to creative_id.
-        if (! is_array($spec) || empty($spec['page_id']) || empty($spec['link_data']) || ! is_array($spec['link_data'])) {
-            return ['id' => $creative->meta_id];
-        }
-
-        // Force the current website URL into the spec.
-        $url = $this->meta->normalizeLandingUrlForMeta((string) ($creative->destination_url ?? ''));
-        $spec['link_data']['link'] = $url;
-        if (isset($spec['link_data']['call_to_action']['value']) && is_array($spec['link_data']['call_to_action']['value'])) {
-            $spec['link_data']['call_to_action']['value']['link'] = $url;
-        }
-
-        // Ensure we use the same Page identity as the Ad Set's promoted_object (if set).
-        try {
-            $metaAdSet = $this->meta->getAdSet((string) $adset->meta_id);
-            $po = $metaAdSet['promoted_object'] ?? null;
-            if (is_array($po) && ! empty($po['page_id'])) {
-                $spec['page_id'] = (string) $po['page_id'];
-            }
-        } catch (Throwable $e) {
-            // ignore and proceed with stored page_id
-        }
-
-        // Some placements (especially Instagram) require instagram_user_id on object_story_spec.
-        if (empty($spec['instagram_user_id'])) {
-            $ig = $this->meta->getConnectedInstagramUserId((string) $spec['page_id']);
-            if (! empty($ig)) {
-                $spec['instagram_user_id'] = $ig;
-            }
-        }
-
-        // Add caption as domain (helps Meta classify as external link).
-        if (empty($spec['link_data']['caption'])) {
-            $host = (string) parse_url($url, PHP_URL_HOST);
-            $spec['link_data']['caption'] = preg_replace('/^www\./i', '', $host);
-        }
-
-        return [
-            'spec' => [
-                'name' => (string) ($creative->name ?? 'Link Ad Creative'),
-                'actor_id' => (string) $spec['page_id'],
-                'object_story_spec' => $spec,
-            ],
-        ];
-    }
-
-    /**
      * Recreate a Meta ad creative from our stored payload, for ad creation fallback.
      */
     private function recreateMetaCreativeForAd(string $accountId, Creative $creative, AdSet $adset): string
@@ -1254,5 +1182,14 @@ public function live(): JsonResponse
         $creative->update(['meta_id' => (string) $created['id']]);
 
         return (string) $created['id'];
+    }
+
+    private function extractMetaSubcode(Throwable $e): ?int
+    {
+        if (preg_match('/Meta subcode\\s+(\\d+)/', $e->getMessage(), $m)) {
+            return (int) $m[1];
+        }
+
+        return null;
     }
 }
