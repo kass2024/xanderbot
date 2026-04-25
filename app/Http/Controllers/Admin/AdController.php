@@ -1152,9 +1152,24 @@ public function live(): JsonResponse
             $spec['link_data']['call_to_action']['value']['link'] = $url;
         }
 
+        // Some placements (especially Instagram) require instagram_user_id on object_story_spec.
+        if (empty($spec['instagram_user_id'])) {
+            $ig = $this->meta->getConnectedInstagramUserId((string) $spec['page_id']);
+            if (! empty($ig)) {
+                $spec['instagram_user_id'] = $ig;
+            }
+        }
+
+        // Add caption as domain (helps Meta classify as external link).
+        if (empty($spec['link_data']['caption'])) {
+            $host = (string) parse_url($url, PHP_URL_HOST);
+            $spec['link_data']['caption'] = preg_replace('/^www\./i', '', $host);
+        }
+
         return [
             'spec' => [
                 'name' => (string) ($creative->name ?? 'Link Ad Creative'),
+                'actor_id' => (string) $spec['page_id'],
                 'object_story_spec' => $spec,
             ],
         ];
