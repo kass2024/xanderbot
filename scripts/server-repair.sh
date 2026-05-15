@@ -3,10 +3,14 @@
 #   chmod +x scripts/server-repair.sh && ./scripts/server-repair.sh
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=php-env.sh
+source "${SCRIPT_DIR}/php-env.sh"
+
 APP_DIR="${1:-/var/www/xanderbot}"
 WEB_USER="${WEB_USER:-www-data}"
 
-echo "==> Repairing Laravel app at ${APP_DIR}"
+echo "==> Repairing Laravel app at ${APP_DIR} (PHP: ${PHP_BIN})"
 cd "$APP_DIR"
 
 if [[ ! -f artisan ]]; then
@@ -17,7 +21,7 @@ fi
 # 1) Take site out of maintenance mode
 if [[ -f storage/framework/maintenance.php ]] || [[ -f storage/framework/down ]]; then
   echo "==> Disabling maintenance mode"
-  php artisan up || true
+  "$PHP_BIN" artisan up || true
   rm -f storage/framework/maintenance.php 2>/dev/null || true
 fi
 
@@ -31,24 +35,21 @@ chown -R "${WEB_USER}:${WEB_USER}" storage bootstrap/cache 2>/dev/null || true
 # 3) Public storage link (voice notes, uploads)
 if [[ ! -L public/storage ]]; then
   echo "==> Creating storage link"
-  php artisan storage:link || true
+  "$PHP_BIN" artisan storage:link || true
 fi
 
-# 4) Clear stale caches (permission errors often hide here)
+# 4) Clear stale caches
 echo "==> Clearing caches"
-php artisan config:clear || true
-php artisan route:clear || true
-php artisan view:clear || true
-php artisan cache:clear || true
+"$PHP_BIN" artisan optimize:clear || true
 
 # 5) Rebuild caches as web user if possible
 echo "==> Rebuilding config & routes"
 if id "$WEB_USER" &>/dev/null; then
-  sudo -u "$WEB_USER" php artisan config:cache || php artisan config:cache || true
-  sudo -u "$WEB_USER" php artisan route:cache || php artisan route:cache || true
+  sudo -u "$WEB_USER" "$PHP_BIN" artisan config:cache || "$PHP_BIN" artisan config:cache || true
+  sudo -u "$WEB_USER" "$PHP_BIN" artisan route:cache || "$PHP_BIN" artisan route:cache || true
 else
-  php artisan config:cache || true
-  php artisan route:cache || true
+  "$PHP_BIN" artisan config:cache || true
+  "$PHP_BIN" artisan route:cache || true
 fi
 
 # 6) Prescreening bridge path (legacy Xander PHP on same server)
@@ -64,10 +65,11 @@ else
   done
 fi
 
+FPM_SOCK="$(detect_php_fpm_socket || echo 'not found')"
 echo ""
-echo "==> Done. Verify:"
+echo "==> Done. PHP-FPM for Apache: ${FPM_SOCK}"
+echo "    If site is 503, run: ./scripts/fix-apache-xanderbot.sh"
 echo "    curl -sI https://xanderbot.site | head -5"
 echo "    curl -s https://xanderbot.site/api/health"
 echo ""
-echo "Apache vhost DocumentRoot MUST be: ${APP_DIR}/public"
-echo "Enable site: a2ensite xanderbot.conf && systemctl reload apache2"
+echo "Apache DocumentRoot MUST be: ${APP_DIR}/public"

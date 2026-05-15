@@ -23,6 +23,13 @@
         Options -Indexes +FollowSymLinks
     </Directory>
 
+    # REQUIRED — must match PHP-FPM that serves the site (this server uses /opt/php82):
+    #   grep '^listen' /opt/php82/etc/php-fpm.d/www.conf
+    # Common: unix:/opt/php82/var/run/php-fpm.sock  OR  tcp:127.0.0.1:9000
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:/opt/php82/var/run/php-fpm.sock|fcgi://localhost"
+    </FilesMatch>
+
     ErrorLog ${APACHE_LOG_DIR}/xanderbot-error.log
     CustomLog ${APACHE_LOG_DIR}/xanderbot-access.log combined
 
