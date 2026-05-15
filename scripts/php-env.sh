@@ -49,11 +49,9 @@ detect_php_fpm_socket() {
   fi
 
   for sock in \
+    /run/php/php82-fpm.sock \
     /opt/php82/var/run/php-fpm.sock \
     /opt/php82/var/run/php82-fpm.sock \
-    /opt/php82/run/php-fpm.sock \
-    /run/php82-fpm.sock \
-    /run/php-fpm82.sock \
     /run/php/php8.2-fpm.sock \
     /run/php/php8.1-fpm.sock; do
     if [[ -S "$sock" ]]; then
