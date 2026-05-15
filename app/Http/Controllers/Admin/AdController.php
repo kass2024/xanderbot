@@ -409,10 +409,20 @@ $ad = Ad::create([
 
     /*
     |--------------------------------------------------------------------------
+    | SHOW (resource route) → preview dashboard
+    |--------------------------------------------------------------------------
+    */
+    public function show(Ad $ad): RedirectResponse
+    {
+        return redirect()->route('admin.ads.preview', $ad);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | PREVIEW CREATIVE
     |--------------------------------------------------------------------------
     */
-public function preview(Ad $ad): View
+    public function preview(Ad $ad): View
 {
     $ad->load([
         'creative',

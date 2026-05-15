@@ -1,0 +1,37 @@
+# Copy to: /etc/apache2/sites-available/xanderbot.conf
+# Then:  a2ensite xanderbot.conf && a2dissite 000-default.conf && systemctl reload apache2
+#
+# DocumentRoot MUST be .../public (not the project root).
+
+<VirtualHost *:80>
+    ServerName xanderbot.site
+    ServerAlias www.xanderbot.site
+
+    Redirect permanent / https://xanderbot.site/
+</VirtualHost>
+
+<IfModule mod_ssl.c>
+<VirtualHost *:443>
+    ServerName xanderbot.site
+    ServerAlias www.xanderbot.site
+
+    DocumentRoot /var/www/xanderbot/public
+
+    <Directory /var/www/xanderbot/public>
+        AllowOverride All
+        Require all granted
+        Options -Indexes +FollowSymLinks
+    </Directory>
+
+    ErrorLog ${APACHE_LOG_DIR}/xanderbot-error.log
+    CustomLog ${APACHE_LOG_DIR}/xanderbot-access.log combined
+
+  # SSL — replace with your cert paths (certbot example below)
+  SSLEngine on
+  SSLCertificateFile /etc/letsencrypt/live/xanderbot.site/fullchain.pem
+  SSLCertificateKeyFile /etc/letsencrypt/live/xanderbot.site/privkey.pem
+  Include /etc/letsencrypt/options-ssl-apache.conf
+</VirtualHost>
+</IfModule>
+
+# WhatsApp webhook (no CSRF): https://xanderbot.site/api/webhook/meta

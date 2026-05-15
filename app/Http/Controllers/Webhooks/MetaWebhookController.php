@@ -9,6 +9,7 @@ use App\Models\PlatformMetaConnection;
 use App\Services\Chatbot\ChatbotProcessor;
 use App\Services\Chatbot\MessageDispatcher;
 use App\Services\Chatbot\SpeechService;
+use App\Services\Prescreening\XanderPrescreeningBridge;
 use App\Services\WhatsAppAudioConverter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -23,7 +24,8 @@ class MetaWebhookController extends Controller
 {
     public function __construct(
         protected ChatbotProcessor $processor,
-        protected MessageDispatcher $dispatcher
+        protected MessageDispatcher $dispatcher,
+        protected XanderPrescreeningBridge $prescreening
     ) {}
 
     /*
@@ -130,6 +132,10 @@ class MetaWebhookController extends Controller
             }
 
             if ($this->isDuplicate($messageId)) {
+                continue;
+            }
+
+            if ($this->prescreening->handleInbound($from, $incoming)) {
                 continue;
             }
 
@@ -364,18 +370,22 @@ class MetaWebhookController extends Controller
             'interactive' => [
                 'text' => trim(
                     $incoming['interactive']['button_reply']['title']
+                    ?? $incoming['interactive']['button_reply']['id']
                     ?? $incoming['interactive']['list_reply']['title']
+                    ?? $incoming['interactive']['list_reply']['id']
                     ?? ''
                 ),
             ],
             'audio' => [
                 'audio_media_id' => $incoming['audio']['id'] ?? null,
             ],
-            // Some payloads label voice distinctly; treat like audio.
             'voice' => [
                 'audio_media_id' => is_array($incoming['voice'] ?? null)
                     ? ($incoming['voice']['id'] ?? null)
                     : null,
+            ],
+            'image', 'document' => [
+                'text' => '',
             ],
             default => [],
         };
