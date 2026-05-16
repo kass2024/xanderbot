@@ -62,16 +62,38 @@ class MetaWebhookController extends Controller
     */
     public function handle(Request $request): Response
     {
+        $rawBody = $request->getContent();
+        $hit = [
+            'at' => now()->toIso8601String(),
+            'bytes' => strlen($rawBody),
+            'has_signature' => $request->hasHeader('X-Hub-Signature-256'),
+            'ip' => $request->ip(),
+        ];
+        @file_put_contents(
+            storage_path('logs/webhook-hits.log'),
+            json_encode($hit).PHP_EOL,
+            FILE_APPEND | LOCK_EX
+        );
+        Log::info('META_WEBHOOK_POST', $hit);
+
         if (! $this->isValidSignature($request)) {
-            Log::warning('Invalid Meta webhook signature', [
+            Log::error('META_WEBHOOK_SIGNATURE_REJECTED', [
                 'has_secret' => (bool) config('services.whatsapp_webhook.app_secret'),
                 'has_signature_header' => $request->hasHeader('X-Hub-Signature-256'),
+                'hint' => 'WHATSAPP_APP_SECRET in .env must match Meta App → Settings → Basic',
             ]);
+            WhatsAppTracker::whatsapp('webhook_signature_rejected', $hit, 'error');
 
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
-        $payload = $request->json()->all();
+        $payload = json_decode($rawBody, true);
+        if (! is_array($payload)) {
+            Log::warning('META_WEBHOOK_INVALID_JSON', ['bytes' => strlen($rawBody)]);
+            WhatsAppTracker::whatsapp('webhook_invalid_json', $hit, 'warning');
+
+            return response()->json(['status' => 'ignored'], 200);
+        }
 
         if (($payload['object'] ?? null) !== 'whatsapp_business_account') {
             return response()->json(['status' => 'ignored'], 200);

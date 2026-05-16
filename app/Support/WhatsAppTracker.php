@@ -37,6 +37,8 @@ final class WhatsAppTracker
         $message = '['.$action.'] '.json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         Log::channel($channel)->log($level, $message, $payload);
+        // Also write to laravel.log so `tail -f storage/logs/laravel.log` shows traffic
+        Log::channel('single')->log($level, '['.$channel.'] '.$message, $payload);
     }
 
     public static function whatsapp(string $action, array $context = [], string $level = 'info'): void

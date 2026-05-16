@@ -100,18 +100,11 @@ class XanderPrescreeningBridge
             return ['forward' => true, 'reason' => 'keyword_trigger', 'text' => $text];
         }
 
+        // Always forward START/CANCEL — cPanel handles invited sessions (do not rely on active_session HTTP alone)
         if (in_array($action, ['start', 'cancel'], true)) {
-            $active = $this->hasActiveSession($waPhone);
-            if (! $active && $action === 'start') {
-                WhatsAppTracker::prescreening('start_without_cpanel_session', [
-                    'from' => $waPhone,
-                    'hint' => 'Send invite from cPanel first, or check PRESCREENING_FORWARD_SECRET / XANDER_PRESCREENING_URL',
-                ], 'warning');
-            }
-
             return [
-                'forward' => $active,
-                'reason' => $active ? 'button_'.$action : 'button_'.$action.'_no_session',
+                'forward' => true,
+                'reason' => 'button_'.$action,
                 'text' => $text,
             ];
         }

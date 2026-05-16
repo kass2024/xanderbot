@@ -34,8 +34,16 @@ Route::get('/webhook/diagnostic', function () {
         ? \App\Models\PlatformMetaConnection::where('whatsapp_phone_number_id', $envPhoneId)->first()
         : null;
 
+    $hitsFile = storage_path('logs/webhook-hits.log');
+    $hitsTail = [];
+    if (is_readable($hitsFile)) {
+        $lines = file($hitsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        $hitsTail = is_array($lines) ? array_slice($lines, -10) : [];
+    }
+
     return response()->json([
         'webhook_url' => url('/api/webhook/meta'),
+        'meta_console_must_subscribe' => 'messages (includes status + inbound)',
         'app_secret_configured' => (bool) config('services.whatsapp_webhook.app_secret'),
         'verify_token_configured' => (bool) config('services.whatsapp_webhook.verify_token'),
         'env_whatsapp_phone_number_id' => $envPhoneId,
@@ -44,6 +52,14 @@ Route::get('/webhook/diagnostic', function () {
         'prescreening_forward_enabled' => config('prescreening.forward_enabled'),
         'prescreening_forward_url' => config('prescreening.forward_url'),
         'prescreening_forward_secret_set' => (bool) config('prescreening.forward_secret'),
+        'tracking_enabled' => config('tracking.whatsapp_enabled'),
+        'recent_webhook_hits' => $hitsTail,
+        'tail_commands' => [
+            'laravel' => 'tail -f storage/logs/laravel.log | grep -iE META_WEBHOOK|delivery|prescreen',
+            'whatsapp' => 'tail -f storage/logs/whatsapp-'.date('Y-m-d').'.log',
+            'prescreening' => 'tail -f storage/logs/prescreening-'.date('Y-m-d').'.log',
+            'hits' => 'tail -f storage/logs/webhook-hits.log',
+        ],
         'php_fpm' => PHP_SAPI,
     ]);
 });
