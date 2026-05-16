@@ -2,10 +2,11 @@
 
 namespace App\Services\Chatbot;
 
+use App\Models\PlatformMetaConnection;
+use App\Support\WhatsAppTracker;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
-use App\Models\PlatformMetaConnection;
 
 class MessageDispatcher
 {
@@ -22,9 +23,11 @@ class MessageDispatcher
         array $payload
     ): array {
 
-        Log::info('WhatsApp Dispatcher started', [
+        WhatsAppTracker::whatsapp('outbound_dispatch_start', [
             'to' => $to,
             'platform_id' => $platform->id,
+            'has_text' => ! empty($payload['text']),
+            'attachments' => count($payload['attachments'] ?? []),
         ]);
 
         if (empty($platform->whatsapp_phone_number_id)) {
@@ -224,12 +227,16 @@ class MessageDispatcher
                 ->retry(2, 500)
                 ->post($endpoint, $body);
 
-            if ($response->failed()) {
+            $msgType = (string) ($body['type'] ?? 'unknown');
+            $to = (string) ($body['to'] ?? '');
 
-                Log::error('WhatsApp API request failed', [
-                    'status'   => $response->status(),
-                    'response' => $response->body(),
-                ]);
+            if ($response->failed()) {
+                WhatsAppTracker::whatsapp('graph_send_failed', [
+                    'to' => $to,
+                    'type' => $msgType,
+                    'http_status' => $response->status(),
+                    'response' => substr((string) $response->body(), 0, 1500),
+                ], 'error');
 
                 return [
                     'success' => false,
@@ -239,23 +246,28 @@ class MessageDispatcher
             }
 
             $data = $response->json();
+            $messageId = $data['messages'][0]['id'] ?? null;
+            $messageStatus = $data['messages'][0]['message_status'] ?? null;
 
-            Log::info('WhatsApp message sent', [
-                'response' => $data,
+            WhatsAppTracker::whatsapp('graph_send_ok', [
+                'to' => $to,
+                'type' => $msgType,
+                'wamid' => $messageId,
+                'message_status' => $messageStatus,
             ]);
 
             return [
                 'success' => true,
-                'external_message_id' =>
-                    $data['messages'][0]['id'] ?? null,
+                'external_message_id' => $messageId,
                 'response' => $data,
             ];
 
         } catch (\Throwable $e) {
-
-            Log::critical('WhatsApp API exception', [
+            WhatsAppTracker::whatsapp('graph_send_exception', [
+                'to' => (string) ($body['to'] ?? ''),
+                'type' => (string) ($body['type'] ?? ''),
                 'error' => $e->getMessage(),
-            ]);
+            ], 'critical');
 
             return [
                 'success' => false,

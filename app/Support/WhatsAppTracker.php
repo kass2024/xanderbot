@@ -1,0 +1,83 @@
+<?php
+
+namespace App\Support;
+
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+
+/**
+ * Structured WhatsApp + pre-screening tracking (dedicated log files).
+ *
+ * tail -f storage/logs/whatsapp-$(date +%Y-%m-%d).log
+ * tail -f storage/logs/prescreening-$(date +%Y-%m-%d).log
+ */
+final class WhatsAppTracker
+{
+    public static function enabled(): bool
+    {
+        return filter_var(config('tracking.whatsapp_enabled', true), FILTER_VALIDATE_BOOL);
+    }
+
+    /**
+     * @param  'whatsapp'|'prescreening'  $channel
+     * @param  array<string, mixed>  $context
+     */
+    public static function log(string $channel, string $action, array $context = [], string $level = 'info'): void
+    {
+        if (! self::enabled()) {
+            return;
+        }
+
+        $payload = array_merge([
+            'ts' => now()->toIso8601String(),
+            'action' => $action,
+            'trace_id' => (string) Str::uuid(),
+        ], self::sanitize($context));
+
+        $message = '['.$action.'] '.json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        Log::channel($channel)->log($level, $message, $payload);
+    }
+
+    public static function whatsapp(string $action, array $context = [], string $level = 'info'): void
+    {
+        self::log('whatsapp', $action, $context, $level);
+    }
+
+    public static function prescreening(string $action, array $context = [], string $level = 'info'): void
+    {
+        self::log('prescreening', $action, $context, $level);
+    }
+
+    /**
+     * Strip secrets and clip large bodies for logs.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    public static function sanitize(array $data): array
+    {
+        $out = [];
+        foreach ($data as $key => $value) {
+            $k = strtolower((string) $key);
+            if (in_array($k, ['secret', 'token', 'authorization', 'password', 'access_token'], true)) {
+                $out[$key] = '[redacted]';
+
+                continue;
+            }
+            if (is_string($value) && strlen($value) > 2000) {
+                $out[$key] = substr($value, 0, 2000).'…[truncated]';
+
+                continue;
+            }
+            if (is_array($value)) {
+                $out[$key] = self::sanitize($value);
+
+                continue;
+            }
+            $out[$key] = $value;
+        }
+
+        return $out;
+    }
+}

@@ -9,11 +9,16 @@ return [
     | Meta webhook stays: https://xanderbot.site/api/webhook/meta
     | cPanel handles DB + prescreening logic at forward_url.
     */
+    'forward_enabled' => filter_var(env('PRESCREENING_FORWARD_ENABLED', true), FILTER_VALIDATE_BOOL),
+
     'forward_url' => env('XANDER_PRESCREENING_URL', 'https://xanderglobalscholars.com/api/prescreening-inbound.php'),
 
     'forward_secret' => env('PRESCREENING_FORWARD_SECRET', ''),
 
-    'forward_timeout' => (int) env('PRESCREENING_FORWARD_TIMEOUT', 25),
+    /** Keep low — Meta webhook must respond within ~10s */
+    'forward_timeout' => (int) env('PRESCREENING_FORWARD_TIMEOUT', 8),
+
+    'forward_session_timeout' => (int) env('PRESCREENING_FORWARD_SESSION_TIMEOUT', 4),
 
     /*
     |--------------------------------------------------------------------------

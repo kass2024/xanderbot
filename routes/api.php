@@ -28,6 +28,26 @@ Route::get('/health', function () {
     ]);
 });
 
+Route::get('/webhook/diagnostic', function () {
+    $envPhoneId = (string) config('services.whatsapp.phone_number_id');
+    $platform = $envPhoneId !== ''
+        ? \App\Models\PlatformMetaConnection::where('whatsapp_phone_number_id', $envPhoneId)->first()
+        : null;
+
+    return response()->json([
+        'webhook_url' => url('/api/webhook/meta'),
+        'app_secret_configured' => (bool) config('services.whatsapp_webhook.app_secret'),
+        'verify_token_configured' => (bool) config('services.whatsapp_webhook.verify_token'),
+        'env_whatsapp_phone_number_id' => $envPhoneId,
+        'platform_linked_in_db' => (bool) $platform,
+        'platform_id' => $platform?->id,
+        'prescreening_forward_enabled' => config('prescreening.forward_enabled'),
+        'prescreening_forward_url' => config('prescreening.forward_url'),
+        'prescreening_forward_secret_set' => (bool) config('prescreening.forward_secret'),
+        'php_fpm' => PHP_SAPI,
+    ]);
+});
+
 
 /*
 |--------------------------------------------------------------------------

@@ -11,6 +11,7 @@ use App\Services\Chatbot\MessageDispatcher;
 use App\Services\Chatbot\SpeechService;
 use App\Services\Prescreening\XanderPrescreeningBridge;
 use App\Services\WhatsAppAudioConverter;
+use App\Support\WhatsAppTracker;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -62,7 +63,10 @@ class MetaWebhookController extends Controller
     public function handle(Request $request): Response
     {
         if (! $this->isValidSignature($request)) {
-            Log::warning('Invalid Meta webhook signature');
+            Log::warning('Invalid Meta webhook signature', [
+                'has_secret' => (bool) config('services.whatsapp_webhook.app_secret'),
+                'has_signature_header' => $request->hasHeader('X-Hub-Signature-256'),
+            ]);
 
             return response()->json(['error' => 'Unauthorized'], 403);
         }
@@ -72,6 +76,10 @@ class MetaWebhookController extends Controller
         if (($payload['object'] ?? null) !== 'whatsapp_business_account') {
             return response()->json(['status' => 'ignored'], 200);
         }
+
+        WhatsAppTracker::whatsapp('webhook_received', [
+            'entries' => count($payload['entry'] ?? []),
+        ]);
 
         foreach ($payload['entry'] ?? [] as $entry) {
             foreach ($entry['changes'] ?? [] as $change) {
@@ -112,13 +120,18 @@ class MetaWebhookController extends Controller
         )->first();
 
         if (! $platform) {
-            Log::warning('Platform not found', ['phone_number_id' => $phoneNumberId]);
+            Log::warning('Platform not found — bot cannot reply. Link this phone in admin Meta settings.', [
+                'phone_number_id' => $phoneNumberId,
+                'env_phone_id' => config('services.whatsapp.phone_number_id'),
+            ]);
 
             return;
         }
 
         $clientId = $this->resolveClientId($platform);
         if (! $clientId) {
+            Log::error('Webhook: client not found for platform', ['platform_id' => $platform->id]);
+
             return;
         }
 
@@ -132,12 +145,25 @@ class MetaWebhookController extends Controller
             }
 
             if ($this->isDuplicate($messageId)) {
+                Log::debug('Webhook: duplicate message skipped', ['id' => $messageId]);
+
                 continue;
             }
 
+            WhatsAppTracker::whatsapp('inbound_message', [
+                'from' => $from,
+                'type' => $incoming['type'] ?? null,
+                'message_id' => $messageId,
+                'text_preview' => mb_substr($this->extractInboundPayload($incoming)['text'] ?? '', 0, 120),
+            ]);
+
             if ($this->prescreening->handleInbound($from, $incoming)) {
+                WhatsAppTracker::prescreening('webhook_routed_prescreening', ['from' => $from, 'message_id' => $messageId]);
+
                 continue;
             }
+
+            WhatsAppTracker::whatsapp('webhook_routed_chatbot', ['from' => $from, 'message_id' => $messageId]);
 
             $payload = $this->extractInboundPayload($incoming);
 
@@ -236,8 +262,16 @@ class MetaWebhookController extends Controller
                 ]);
 
                 if (empty($aiResponse) || empty($aiResponse['text'])) {
+                    Log::warning('Webhook: chatbot returned empty response', ['from' => $from]);
+
                     continue;
                 }
+
+                Log::info('Webhook: sending chatbot reply', [
+                    'from' => $from,
+                    'source' => $aiResponse['source'] ?? null,
+                    'text_len' => strlen($aiResponse['text'] ?? ''),
+                ]);
 
                 if (config('chatbot.voice_faq_replies') && $this->shouldAttachVoiceReply($aiResponse)) {
                     Log::channel('voice')->info('Outbound TTS: attempting', [
@@ -302,10 +336,29 @@ class MetaWebhookController extends Controller
             Message::where('external_message_id', $externalId)
                 ->update(['status' => $delivery]);
 
-            Log::info('Message status updated', [
+            $recipient = $status['recipient_id'] ?? null;
+            $errors = $status['errors'] ?? [];
+            $logCtx = [
                 'external_id' => $externalId,
                 'status' => $delivery,
-            ]);
+                'recipient_id' => $recipient,
+            ];
+            if (is_array($errors) && $errors !== []) {
+                $logCtx['errors'] = $errors;
+                $first = $errors[0] ?? [];
+                $logCtx['error_code'] = $first['code'] ?? null;
+                $logCtx['error_title'] = $first['title'] ?? null;
+                $logCtx['error_message'] = $first['message'] ?? null;
+                $logCtx['error_details'] = $first['error_data']['details'] ?? null;
+            }
+
+            if ($delivery === 'failed') {
+                WhatsAppTracker::whatsapp('delivery_failed', $logCtx, 'error');
+            } elseif (in_array($delivery, ['sent', 'delivered', 'read'], true)) {
+                WhatsAppTracker::whatsapp('delivery_'.$delivery, $logCtx);
+            } else {
+                WhatsAppTracker::whatsapp('delivery_status', $logCtx);
+            }
         }
     }
 
