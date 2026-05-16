@@ -87,10 +87,16 @@ class XanderPrescreeningBridge
         ];
 
         $response = $this->postForward($forwardUrl, $payload, 4);
+        $errorCode = null;
+        $errors = $status['errors'] ?? [];
+        if (is_array($errors) && isset($errors[0]['code'])) {
+            $errorCode = (int) $errors[0]['code'];
+        }
         WhatsAppTracker::prescreening('delivery_forward', [
             'status' => $delivery,
             'wamid' => $payload['wamid'],
             'recipient_id' => $payload['recipient_id'],
+            'meta_error_code' => $errorCode,
             'recorded' => (bool) ($response['recorded'] ?? false),
         ], ($response['recorded'] ?? false) ? 'info' : 'warning');
     }

@@ -62,8 +62,19 @@ final class WhatsAppTracker
         $out = [];
         foreach ($data as $key => $value) {
             $k = strtolower((string) $key);
-            if (in_array($k, ['secret', 'token', 'authorization', 'password', 'access_token'], true)) {
+            if (in_array($k, ['secret', 'token', 'authorization', 'password', 'access_token', 'app_key'], true)) {
                 $out[$key] = '[redacted]';
+
+                continue;
+            }
+            if (in_array($k, ['to', 'from', 'recipient_id', 'phone', 'phone_raw'], true) && is_string($value)) {
+                $digits = preg_replace('/\D+/', '', $value) ?? '';
+                $out[$key] = strlen($digits) >= 4 ? '***'.substr($digits, -4) : '[redacted]';
+
+                continue;
+            }
+            if (is_string($value) && preg_match('/\bEAA[A-Za-z0-9]{20,}/', $value)) {
+                $out[$key] = '[redacted_token]';
 
                 continue;
             }
