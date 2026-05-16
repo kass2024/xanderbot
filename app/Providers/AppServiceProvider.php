@@ -19,6 +19,15 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        $logDir = storage_path('logs');
+        if (! is_dir($logDir)) {
+            @mkdir($logDir, 0775, true);
+        }
+        foreach (['webhook-hits.log', 'laravel.log'] as $name) {
+            $path = $logDir.DIRECTORY_SEPARATOR.$name;
+            if (! is_file($path)) {
+                @touch($path);
+            }
+        }
     }
 }
