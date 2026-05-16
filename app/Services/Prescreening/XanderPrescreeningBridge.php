@@ -55,6 +55,44 @@ class XanderPrescreeningBridge
         return $handled;
     }
 
+    /**
+     * Forward Meta message status webhooks to cPanel for invite delivery tracking.
+     *
+     * @param  array<string, mixed>  $status
+     */
+    public function forwardDeliveryStatus(array $status): void
+    {
+        if (! config('prescreening.forward_enabled', true)) {
+            return;
+        }
+
+        $forwardUrl = trim((string) config('prescreening.forward_url'));
+        if ($forwardUrl === '') {
+            return;
+        }
+
+        $delivery = strtolower(trim((string) ($status['status'] ?? '')));
+        if ($delivery === '') {
+            return;
+        }
+
+        $payload = [
+            'action' => 'delivery_status',
+            'wamid' => (string) ($status['id'] ?? ''),
+            'status' => $delivery,
+            'recipient_id' => (string) ($status['recipient_id'] ?? ''),
+            'errors' => $status['errors'] ?? [],
+        ];
+
+        $response = $this->postForward($forwardUrl, $payload, 4);
+        WhatsAppTracker::prescreening('delivery_forward', [
+            'status' => $delivery,
+            'wamid' => $payload['wamid'],
+            'recipient_id' => $payload['recipient_id'],
+            'recorded' => (bool) ($response['recorded'] ?? false),
+        ], ($response['recorded'] ?? false) ? 'info' : 'warning');
+    }
+
     public function hasActiveSession(string $waPhone): bool
     {
         $forwardUrl = trim((string) config('prescreening.forward_url'));

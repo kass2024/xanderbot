@@ -381,6 +381,15 @@ class MetaWebhookController extends Controller
             } else {
                 WhatsAppTracker::whatsapp('delivery_status', $logCtx);
             }
+
+            try {
+                $this->prescreening->forwardDeliveryStatus($status);
+            } catch (\Throwable $e) {
+                Log::warning('Prescreening delivery forward failed', [
+                    'error' => $e->getMessage(),
+                    'external_id' => $externalId,
+                ]);
+            }
         }
     }
 
