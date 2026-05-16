@@ -76,11 +76,13 @@ class XanderPrescreeningBridge
             return;
         }
 
+        $recipient = (string) ($status['recipient_id'] ?? '');
         $payload = [
             'action' => 'delivery_status',
             'wamid' => (string) ($status['id'] ?? ''),
             'status' => $delivery,
-            'recipient_id' => (string) ($status['recipient_id'] ?? ''),
+            'recipient_id' => $recipient,
+            'from' => $recipient,
             'errors' => $status['errors'] ?? [],
         ];
 
