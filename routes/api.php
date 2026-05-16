@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\Prescreening\XanderPrescreeningBridge;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Webhooks\MetaWebhookController;
@@ -52,6 +53,10 @@ Route::get('/webhook/diagnostic', function () {
         'prescreening_forward_enabled' => config('prescreening.forward_enabled'),
         'prescreening_forward_url' => config('prescreening.forward_url'),
         'prescreening_forward_secret_set' => (bool) config('prescreening.forward_secret'),
+        'delivery_forward_in_webhook' => str_contains(
+            (string) @file_get_contents(app_path('Http/Controllers/Webhooks/MetaWebhookController.php')),
+            'forwardDeliveryStatus'
+        ),
         'tracking_enabled' => config('tracking.whatsapp_enabled'),
         'recent_webhook_hits' => $hitsTail,
         'tail_commands' => [
@@ -61,6 +66,34 @@ Route::get('/webhook/diagnostic', function () {
             'hits' => 'tail -f storage/logs/webhook-hits.log',
         ],
         'php_fpm' => PHP_SAPI,
+    ]);
+});
+
+/*
+|--------------------------------------------------------------------------
+| Pre-screening forward ping (proves VPS → cPanel delivery_status path)
+|--------------------------------------------------------------------------
+| GET /api/prescreening/forward-ping?secret=PRESCREENING_FORWARD_SECRET
+*/
+Route::get('/prescreening/forward-ping', function (Request $request) {
+    $secret = (string) $request->query('secret', '');
+    $expected = (string) config('prescreening.forward_secret');
+    if ($expected === '' || ! hash_equals($expected, $secret)) {
+        return response()->json(['error' => 'Forbidden — pass ?secret=PRESCREENING_FORWARD_SECRET'], 403);
+    }
+
+    $bridge = app(XanderPrescreeningBridge::class);
+    $bridge->forwardDeliveryStatus([
+        'id' => 'vps-ping-test-wamid',
+        'status' => 'delivered',
+        'recipient_id' => '0000000000',
+        'errors' => [],
+    ]);
+
+    return response()->json([
+        'ok' => true,
+        'message' => 'POST sent to cPanel delivery_status. On cPanel invite log, look for delivery_status_forward in whatsapp-prescreening.log.',
+        'cpanel_url' => config('prescreening.forward_url'),
     ]);
 });
 
