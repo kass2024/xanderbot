@@ -183,6 +183,7 @@ class MetaWebhookController extends Controller
                 'text_preview' => mb_substr($this->extractInboundPayload($incoming)['text'] ?? '', 0, 120),
             ]);
 
+            // Pre-screening only when web admin already sent invite (separate from FAQ bot)
             if ($this->prescreening->handleInbound($from, $incoming)) {
                 WhatsAppTracker::prescreening('webhook_routed_prescreening', ['from' => $from, 'message_id' => $messageId]);
 

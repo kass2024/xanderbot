@@ -69,17 +69,23 @@ WHATSAPP_PRESCREENING_RECEIVED_TEMPLATE_LANG=en
 
 ---
 
-## When pre-screening runs on WhatsApp (routing)
+## Flow (not mixed with FAQ bot)
 
-| Situation | Bot behaviour |
-|-----------|----------------|
-| Student types **prescreening** / **pre-screening** / **prescreen** (no session) | Starts 15-question flow |
-| Admin sent **invite** template; student taps **START** | Continues invited flow |
-| Student in middle of questions or document upload | All messages handled by pre-screening |
-| Student types **CANCEL** | Ends session |
-| Normal chat (**Hello**, visa questions) | FAQ / AI chatbot (not pre-screening) |
+1. **Web admin** sends invite (Pre-screening page → student WhatsApp number).
+2. Student receives template `xander_prescreening_invite` and taps **START**.
+3. Student answers 15 questions + documents **on WhatsApp only** (dedicated handler).
+4. On **Finish** → row in `prescreening_submissions` with `source = whatsapp` → shows in the **same web list** as form submissions.
+5. **Normal WhatsApp chat** (Hello, visa questions) → FAQ bot only. Typing "prescreening" does **not** start a form.
 
-Webhook: `https://xanderbot.site/api/webhook/meta`  
-Pre-screening API (VPS): `https://xanderbot.site/api/prescreening/inbound`
+| Situation | Handler |
+|-----------|---------|
+| **Hello**, general questions | FAQ / AI bot |
+| No web invite; student types random text | FAQ bot |
+| Web invite sent; student taps **START** | Pre-screening Q&A |
+| Mid-flow questions / documents | Pre-screening only |
+| **CANCEL** during invite/flow | Ends pre-screening session |
+
+Webhook (all traffic): `https://xanderbot.site/api/webhook/meta`  
+Pre-screening logic (when invited): forward URL in `.env` (cPanel or `/api/prescreening/inbound`)
 
 After creating templates, wait for **Approved** status before testing invites.

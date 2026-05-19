@@ -9,6 +9,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Web-only start: invite is sent from admin (web). Students cannot type
+    | "prescreening" to start. WhatsApp webhook only handles invited sessions.
+    |--------------------------------------------------------------------------
+    */
+    'web_invite_only' => filter_var(env('PRESCREENING_WEB_INVITE_ONLY', true), FILTER_VALIDATE_BOOL),
+
+    /*
+    |--------------------------------------------------------------------------
+    | On completion: row goes to prescreening_submissions (web list). Optional WA.
+    |--------------------------------------------------------------------------
+    */
+    'completion_whatsapp_thank_you' => filter_var(env('PRESCREENING_COMPLETION_WHATSAPP_THANK_YOU', true), FILTER_VALIDATE_BOOL),
+    'completion_notify_whatsapp' => filter_var(env('PRESCREENING_COMPLETION_NOTIFY_WHATSAPP', false), FILTER_VALIDATE_BOOL),
+
+    /*
+    |--------------------------------------------------------------------------
     | Mode: local = VPS legacy helpers + DB | forward = HTTP to forward_url
     |--------------------------------------------------------------------------
     */
@@ -53,10 +69,10 @@ return [
 
     'staff_whatsapp' => env('PRESCREENING_STAFF_WHATSAPP', '12704387305,254711807646'),
 
-    /** Student text that starts pre-screening (plain chat e.g. "hello" is excluded). */
+    /** Ignored when web_invite_only=true */
     'triggers' => array_values(array_filter(array_map('trim', explode(',', (string) env(
         'PRESCREENING_TRIGGERS',
-        'prescreening,pre-screening,prescreen,screening,start screening'
+        ''
     ))))),
 
 ];

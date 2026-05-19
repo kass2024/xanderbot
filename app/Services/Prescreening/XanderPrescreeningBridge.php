@@ -8,8 +8,11 @@ use Illuminate\Support\Facades\Log;
 use mysqli;
 
 /**
- * Pre-screening: forwards to cPanel only when a session is active (or explicit trigger).
- * Normal chat ("hello", visa questions) stays on the VPS chatbot.
+ * Pre-screening is separate from the FAQ bot:
+ * - Started only from web admin (WhatsApp invite template → session "invited").
+ * - WhatsApp webhook handles START + Q&A + docs until complete.
+ * - Completion saves to prescreening_submissions (same web list as admin form).
+ * - "Hello" and general chat never enter this path.
  */
 class XanderPrescreeningBridge
 {
@@ -90,12 +93,55 @@ class XanderPrescreeningBridge
         }
 
         return in_array($decision['reason'], [
-            'keyword_trigger',
             'button_start',
             'button_cancel',
             'ongoing_session',
             'media_active_session',
         ], true);
+    }
+
+    /**
+     * @return array{active:bool,step:string}
+     */
+    public function sessionState(string $waPhone): array
+    {
+        if ($this->usesLocalPrescreening() || ! config('prescreening.forward_enabled', true)) {
+            return $this->sessionStateLocal($waPhone);
+        }
+
+        $forwardUrl = trim((string) config('prescreening.forward_url'));
+        if ($forwardUrl === '') {
+            return $this->sessionStateLocal($waPhone);
+        }
+
+        $response = $this->postForward($forwardUrl, [
+            'action' => 'active_session',
+            'from' => $waPhone,
+        ], (int) config('prescreening.forward_session_timeout', 4));
+
+        // Fail open → FAQ bot (never block "hello" when cPanel is slow/down)
+        if ($response === null) {
+            return ['active' => false, 'step' => 'idle'];
+        }
+
+        $step = (string) ($response['step'] ?? 'idle');
+        $active = (bool) ($response['active'] ?? false);
+        if ($step === 'idle' && $active) {
+            $step = 'invited';
+        }
+
+        return ['active' => $active, 'step' => $step !== '' ? $step : 'idle'];
+    }
+
+    /** @return array{active:bool,step:string} */
+    protected function sessionStateLocal(string $waPhone): array
+    {
+        $info = $this->activeSessionInfo($waPhone);
+
+        return [
+            'active' => (bool) ($info['active'] ?? false),
+            'step' => (string) ($info['step'] ?? 'idle'),
+        ];
     }
 
     /** @return array{active:bool,step:?string} */
@@ -207,36 +253,99 @@ class XanderPrescreeningBridge
         $text = $this->extractMessageText($message);
         $action = strtolower(trim($text));
 
-        if (in_array($type, ['image', 'document', 'audio'], true)) {
-            $active = $this->hasActiveSession($waPhone);
+        // Hello / FAQ chat: skip cPanel session check when no VPS session (web-invite-only)
+        if (config('prescreening.web_invite_only', true) && $this->isGeneralBotChat($text, $type, $action)) {
+            $local = $this->sessionStateLocal($waPhone);
+            if (! $this->isPrescreeningStep($local['step'])) {
+                return [
+                    'forward' => false,
+                    'reason' => 'general_chat_bot_path',
+                    'text' => $text,
+                ];
+            }
+        }
 
+        $state = $this->sessionState($waPhone);
+        $step = $state['step'];
+        $inPrescreeningFlow = $this->isPrescreeningStep($step);
+
+        if (in_array($type, ['image', 'document', 'audio'], true)) {
             return [
-                'forward' => $active,
-                'reason' => $active ? 'media_active_session' : 'media_no_session',
+                'forward' => $inPrescreeningFlow,
+                'reason' => $inPrescreeningFlow ? 'media_active_session' : 'media_no_session',
                 'text' => $text,
             ];
         }
 
-        if ($this->looksLikePrescreeningTrigger($text)) {
+        if (! config('prescreening.web_invite_only', true) && $this->looksLikePrescreeningTrigger($text)) {
             return ['forward' => true, 'reason' => 'keyword_trigger', 'text' => $text];
         }
 
-        // Always forward START/CANCEL — cPanel handles invited sessions (do not rely on active_session HTTP alone)
         if (in_array($action, ['start', 'cancel'], true)) {
+            if ($inPrescreeningFlow) {
+                return [
+                    'forward' => true,
+                    'reason' => 'button_'.$action,
+                    'text' => $text,
+                ];
+            }
+
             return [
-                'forward' => true,
-                'reason' => 'button_'.$action,
+                'forward' => false,
+                'reason' => 'button_without_web_invite',
                 'text' => $text,
             ];
         }
 
-        $active = $this->hasActiveSession($waPhone);
-
         return [
-            'forward' => $active,
-            'reason' => $active ? 'ongoing_session' : 'no_session_bot_path',
+            'forward' => $inPrescreeningFlow,
+            'reason' => $inPrescreeningFlow ? 'ongoing_session' : 'no_invite_bot_path',
             'text' => $text,
         ];
+    }
+
+    protected function isPrescreeningStep(string $step): bool
+    {
+        if ($step === 'invited') {
+            return true;
+        }
+
+        return str_starts_with($step, 'q:') || str_starts_with($step, 'doc:');
+    }
+
+    /**
+     * Plain FAQ messages (hello, visa questions) — never require Meta templates.
+     */
+    protected function isGeneralBotChat(string $text, string $type, string $action): bool
+    {
+        if (in_array($action, ['start', 'cancel'], true)) {
+            return false;
+        }
+
+        if (! in_array($type, ['text', 'button', 'interactive', ''], true)) {
+            return false;
+        }
+
+        $t = strtolower(trim($text));
+        if ($t === '') {
+            return false;
+        }
+
+        $greetings = [
+            'hi', 'hello', 'hey', 'hola', 'good morning', 'good afternoon', 'good evening',
+            'good day', 'howdy', 'sup', 'yo', 'hi there', 'hello there',
+        ];
+        if (in_array($t, $greetings, true)) {
+            return true;
+        }
+
+        foreach (['hello', 'hi ', 'hey ', 'good morning', 'good afternoon', 'good evening'] as $prefix) {
+            if (str_starts_with($t, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected function looksLikePrescreeningTrigger(string $text): bool
@@ -245,9 +354,7 @@ class XanderPrescreeningBridge
         if ($t === '') {
             return false;
         }
-        $triggers = config('prescreening.triggers', [
-            'prescreening', 'pre-screening', 'prescreen', 'screening', 'start screening',
-        ]);
+        $triggers = config('prescreening.triggers', []);
         foreach ($triggers as $trigger) {
             $trigger = strtolower(trim((string) $trigger));
             if ($trigger !== '' && ($t === $trigger || str_contains($t, $trigger))) {

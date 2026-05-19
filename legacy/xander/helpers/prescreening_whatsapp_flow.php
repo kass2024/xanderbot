@@ -1,8 +1,9 @@
 <?php
 /**
  * Student pre-screening via WhatsApp (conversational flow).
- * Trigger: student sends PRESCREENING (or prescreening / pre-screening).
- * On completion: saves submission and notifies staff numbers from .env.
+ * Start: web admin sends invite (xander_prescreening_admin_send_invite) → student taps START.
+ * Not mixed with FAQ bot — idle students typing "prescreening" are ignored here.
+ * On completion: INSERT prescreening_submissions (source=whatsapp) for the web admin list.
  */
 declare(strict_types=1);
 
@@ -585,8 +586,11 @@ function xander_prescreening_finalize_submission(mysqli $conn, array $row, strin
     $stmt->execute();
     $stmt->close();
 
+    // Web list + admin email; optional extra WhatsApp blasts (off by default)
     xander_send_prescreening_notifications($row, $reference, true);
-    xander_prescreening_notify_staff_whatsapp($row, $reference);
+    if (xander_prescreening_completion_notify_whatsapp()) {
+        xander_prescreening_notify_staff_whatsapp($row, $reference);
+    }
 
     return $reference;
 }
@@ -596,20 +600,53 @@ function xander_prescreening_finalize_submission(mysqli $conn, array $row, strin
  *
  * @return bool true = consumed (do not run chatbot)
  */
+function xander_prescreening_web_invite_only(): bool
+{
+    xander_load_env_file();
+    $v = xander_env_get('PRESCREENING_WEB_INVITE_ONLY');
+    if ($v === '') {
+        return true;
+    }
+
+    return filter_var($v, FILTER_VALIDATE_BOOL);
+}
+
+function xander_prescreening_completion_notify_whatsapp(): bool
+{
+    xander_load_env_file();
+    $v = xander_env_get('PRESCREENING_COMPLETION_NOTIFY_WHATSAPP');
+
+    return $v !== '' && filter_var($v, FILTER_VALIDATE_BOOL);
+}
+
+function xander_prescreening_completion_whatsapp_thank_you(): bool
+{
+    xander_load_env_file();
+    $v = xander_env_get('PRESCREENING_COMPLETION_WHATSAPP_THANK_YOU');
+    if ($v === '') {
+        return true;
+    }
+
+    return filter_var($v, FILTER_VALIDATE_BOOL);
+}
+
 function xander_prescreening_handle_inbound(mysqli $conn, string $waPhone, array $message): bool
 {
     $text = xander_prescreening_extract_inbound_text($message);
     $media = xander_prescreening_extract_inbound_media($message);
     $action = xander_prescreening_normalize_action($text);
 
+    $session = xander_prescreening_load_session($conn, $waPhone);
+    $step = $session ? (string) ($session['current_step'] ?? 'idle') : 'idle';
+
     if ($action === 'cancel') {
+        if ($step === 'idle') {
+            return false;
+        }
         xander_prescreening_reset_session($conn, $waPhone);
         xander_whatsapp_send_plain_text($waPhone, 'Pre-screening cancelled. Your school will send a new invite when ready.');
         return true;
     }
-
-    $session = xander_prescreening_load_session($conn, $waPhone);
-    $step = $session ? (string) ($session['current_step'] ?? 'idle') : 'idle';
     $answers = xander_prescreening_session_decode($session['answers_json'] ?? null);
     $docIndex = $session ? (int) ($session['doc_index'] ?? 0) : 0;
 
@@ -630,10 +667,14 @@ function xander_prescreening_handle_inbound(mysqli $conn, string $waPhone, array
     }
 
     if ($step === 'idle') {
-        if (!xander_prescreening_is_trigger($text)) {
+        if (xander_prescreening_web_invite_only()) {
+            return false;
+        }
+        if (! xander_prescreening_is_trigger($text)) {
             return false;
         }
         xander_prescreening_start_flow($conn, $waPhone);
+
         return true;
     }
 
@@ -715,11 +756,13 @@ function xander_prescreening_handle_inbound(mysqli $conn, string $waPhone, array
         $row = xander_prescreening_row_from_answers($answers, $waPhone);
         try {
             $ref = xander_prescreening_finalize_submission($conn, $row, $waPhone);
-            xander_whatsapp_send_plain_text(
-                $waPhone,
-                "✅ *Pre-screening complete!*\n\nThank you, *" . ($row['student_name'] ?? 'Student') . "*.\n"
-                . "Reference: *{$ref}*\n\nOur team has received your answers and documents and will contact you soon.\n\n— Xander Global Scholars"
-            );
+            if (xander_prescreening_completion_whatsapp_thank_you()) {
+                xander_whatsapp_send_plain_text(
+                    $waPhone,
+                    "✅ *Pre-screening complete!*\n\nThank you, *" . ($row['student_name'] ?? 'Student') . "*.\n"
+                    . "Reference: *{$ref}*\n\nYour answers are on file with admissions. We will contact you soon.\n\n— Xander Global Scholars"
+                );
+            }
         } catch (Throwable $e) {
             error_log('[prescreening_whatsapp_flow] finalize: ' . $e->getMessage());
             xander_whatsapp_send_plain_text($waPhone, 'Something went wrong saving your form. Please try again or contact admissions.');

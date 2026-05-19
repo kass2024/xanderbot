@@ -52,6 +52,7 @@ Route::get('/webhook/diagnostic', function () {
         'env_whatsapp_phone_number_id' => $envPhoneId,
         'platform_linked_in_db' => (bool) $platform,
         'platform_id' => $platform?->id,
+        'prescreening_web_invite_only' => config('prescreening.web_invite_only'),
         'prescreening_mode' => config('prescreening.mode'),
         'prescreening_forward_enabled' => config('prescreening.forward_enabled'),
         'prescreening_forward_url' => config('prescreening.forward_url'),
