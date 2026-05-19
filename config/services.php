@@ -101,7 +101,7 @@ return [
     'whatsapp_webhook' => [
 
         'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
-        'app_secret'   => env('WHATSAPP_APP_SECRET'),
+        'app_secret'   => env('WHATSAPP_APP_SECRET') ?: env('META_APP_SECRET'),
 
         'signature_header' => env(
             'META_SIGNATURE_HEADER',

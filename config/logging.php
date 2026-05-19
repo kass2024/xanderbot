@@ -79,6 +79,13 @@ return [
             'replace_placeholders' => true,
         ],
 
+        'webhook' => [
+            'driver' => 'single',
+            'path' => storage_path('logs/webhook.log'),
+            'level' => env('LOG_WEBHOOK_LEVEL', env('LOG_LEVEL', 'debug')),
+            'replace_placeholders' => true,
+        ],
+
         'whatsapp' => [
             'driver' => 'daily',
             'path' => storage_path('logs/whatsapp.log'),

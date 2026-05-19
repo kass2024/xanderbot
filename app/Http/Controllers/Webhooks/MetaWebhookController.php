@@ -41,18 +41,21 @@ class MetaWebhookController extends Controller
         $mode = $request->input('hub_mode') ?? $request->input('hub.mode');
         $token = $request->input('hub_verify_token') ?? $request->input('hub.verify_token');
         $challenge = $request->input('hub_challenge') ?? $request->input('hub.challenge');
+        $expected = (string) config('services.whatsapp_webhook.verify_token');
+        $tokenOk = hash_equals($expected, (string) $token);
 
-        if (
-            $mode === 'subscribe' &&
-            hash_equals(
-                (string) config('services.whatsapp_webhook.verify_token'),
-                (string) $token
-            )
-        ) {
+        Log::channel('webhook')->info('meta.webhook.verify', [
+            'mode' => $mode,
+            'token_matches' => $tokenOk,
+            'client_ip' => $request->ip(),
+        ]);
+
+        if ($mode === 'subscribe' && $tokenOk) {
             return response($challenge, 200);
         }
 
         Log::warning('Meta webhook verification failed');
+        Log::channel('webhook')->warning('meta.webhook.verify.denied', ['mode' => $mode]);
 
         return response('Forbidden', 403);
     }
@@ -64,9 +67,11 @@ class MetaWebhookController extends Controller
     */
     public function handle(Request $request): Response
     {
+        $correlationId = Str::lower(Str::substr((string) Str::uuid(), 0, 8));
         $rawBody = $request->getContent();
         $hit = [
             'at' => now()->toIso8601String(),
+            'correlation_id' => $correlationId,
             'bytes' => strlen($rawBody),
             'has_signature' => $request->hasHeader('X-Hub-Signature-256'),
             'ip' => $request->ip(),
@@ -76,18 +81,25 @@ class MetaWebhookController extends Controller
             json_encode($hit).PHP_EOL,
             FILE_APPEND | LOCK_EX
         );
+
+        Log::channel('webhook')->info('meta.webhook.post.received', $hit);
         Log::info('META_WEBHOOK_POST', $hit);
 
         if (! $this->isValidSignature($request)) {
             Log::error('META_WEBHOOK_SIGNATURE_REJECTED', [
                 'has_secret' => (bool) config('services.whatsapp_webhook.app_secret'),
                 'has_signature_header' => $request->hasHeader('X-Hub-Signature-256'),
-                'hint' => 'WHATSAPP_APP_SECRET in .env must match Meta App → Settings → Basic',
+                'hint' => 'WHATSAPP_APP_SECRET or META_APP_SECRET must match Meta App → Settings → Basic',
+            ]);
+            Log::channel('webhook')->warning('meta.webhook.post.signature_invalid', [
+                'correlation_id' => $correlationId,
             ]);
             WhatsAppTracker::whatsapp('webhook_signature_rejected', $hit, 'error');
 
             return response()->json(['error' => 'Unauthorized'], 403);
         }
+
+        Log::channel('webhook')->info('meta.webhook.post.signature_ok', ['correlation_id' => $correlationId]);
 
         $payload = json_decode($rawBody, true);
         if (! is_array($payload)) {
@@ -98,19 +110,31 @@ class MetaWebhookController extends Controller
         }
 
         if (($payload['object'] ?? null) !== 'whatsapp_business_account') {
+            Log::channel('webhook')->info('meta.webhook.post.ignored_object', [
+                'correlation_id' => $correlationId,
+                'object' => $payload['object'] ?? null,
+            ]);
+
             return response()->json(['status' => 'ignored'], 200);
         }
 
         WhatsAppTracker::whatsapp('webhook_received', [
             'entries' => count($payload['entry'] ?? []),
+            'correlation_id' => $correlationId,
         ]);
 
         foreach ($payload['entry'] ?? [] as $entry) {
             foreach ($entry['changes'] ?? [] as $change) {
 
                 $value = $change['value'] ?? [];
+                $phoneNumberId = $value['metadata']['phone_number_id'] ?? null;
 
                 if (! empty($value['messages'])) {
+                    Log::channel('webhook')->info('meta.webhook.route.chatbot', [
+                        'correlation_id' => $correlationId,
+                        'phone_number_id' => $phoneNumberId,
+                        'message_count' => count($value['messages']),
+                    ]);
                     $this->handleIncomingMessages($value);
                 }
 
@@ -119,6 +143,8 @@ class MetaWebhookController extends Controller
                 }
             }
         }
+
+        Log::channel('webhook')->info('meta.webhook.post.done', ['correlation_id' => $correlationId]);
 
         return response()->json(['status' => 'ok'], 200);
     }
@@ -298,6 +324,10 @@ class MetaWebhookController extends Controller
                     'from' => $from,
                     'source' => $aiResponse['source'] ?? null,
                     'text_len' => strlen($aiResponse['text'] ?? ''),
+                ]);
+                Log::channel('webhook')->info('meta.webhook.chatbot.reply', [
+                    'from_tail' => strlen($from) >= 4 ? substr($from, -4) : null,
+                    'source' => $aiResponse['source'] ?? null,
                 ]);
 
                 if (config('chatbot.voice_faq_replies') && $this->shouldAttachVoiceReply($aiResponse)) {

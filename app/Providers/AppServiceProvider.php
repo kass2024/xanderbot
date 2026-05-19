@@ -23,7 +23,7 @@ class AppServiceProvider extends ServiceProvider
         if (! is_dir($logDir)) {
             @mkdir($logDir, 0775, true);
         }
-        foreach (['webhook-hits.log', 'laravel.log'] as $name) {
+        foreach (['webhook-hits.log', 'webhook.log', 'laravel.log'] as $name) {
             $path = $logDir.DIRECTORY_SEPARATOR.$name;
             if (! is_file($path)) {
                 @touch($path);

@@ -46,6 +46,8 @@ Route::get('/webhook/diagnostic', function () {
 
     return response()->json([
         'webhook_url' => url('/api/webhook/meta'),
+        'meta_console_set_callback_to' => 'https://xanderbot.site/api/webhook/meta',
+        'cpanel_proxy_env' => 'XANDERBOT_WEBHOOK_URL on cPanel if Meta still points at xanderglobalscholars.com',
         'meta_console_must_subscribe' => 'messages (includes status + inbound)',
         'app_secret_configured' => (bool) config('services.whatsapp_webhook.app_secret'),
         'verify_token_configured' => (bool) config('services.whatsapp_webhook.verify_token'),

@@ -2,6 +2,7 @@
 
 namespace App\Services\WhatsApp;
 
+use App\Models\Client;
 use App\Models\PlatformMetaConnection;
 use App\Models\User;
 use App\Support\WhatsAppTracker;
@@ -80,6 +81,27 @@ class PlatformResolver
 
         $platform->storeAccessToken($token);
 
+        $this->ensureClientForUser($userId);
+
         return $platform->fresh();
+    }
+
+    protected function ensureClientForUser(int $userId): void
+    {
+        if (Client::where('user_id', $userId)->exists()) {
+            return;
+        }
+
+        $user = User::find($userId);
+        $name = $user?->name ?: 'Xander';
+
+        Client::create([
+            'user_id' => $userId,
+            'company_name' => $name,
+            'subscription_plan' => 'free',
+            'subscription_status' => 'active',
+        ]);
+
+        Log::info('PlatformResolver: created default client for webhook', ['user_id' => $userId]);
     }
 }
