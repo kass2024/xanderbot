@@ -315,7 +315,15 @@ class MetaWebhookController extends Controller
                 ]);
 
                 if (empty($aiResponse) || empty($aiResponse['text'])) {
-                    Log::warning('Webhook: chatbot returned empty response', ['from' => $from]);
+                    Log::warning('Webhook: chatbot returned empty response', [
+                        'from' => $from,
+                        'message_id' => $messageId,
+                        'hint' => 'Check chatbot.log / escalated conversation / duplicate Meta id',
+                    ]);
+                    Log::channel('webhook')->warning('meta.webhook.chatbot.empty', [
+                        'from_tail' => strlen($from) >= 4 ? substr($from, -4) : null,
+                        'message_id' => $messageId,
+                    ]);
 
                     continue;
                 }
@@ -361,6 +369,28 @@ class MetaWebhookController extends Controller
                     to: $from,
                     payload: $aiResponse
                 );
+
+                $sentOk = false;
+                foreach ($results as $result) {
+                    if (! empty($result['success'])) {
+                        $sentOk = true;
+                    } else {
+                        Log::error('Webhook: WhatsApp send failed', [
+                            'from' => $from,
+                            'error' => $result['error'] ?? 'unknown',
+                            'status' => $result['status'] ?? null,
+                        ]);
+                        Log::channel('webhook')->error('meta.webhook.send_failed', [
+                            'from_tail' => strlen($from) >= 4 ? substr($from, -4) : null,
+                            'status' => $result['status'] ?? null,
+                        ]);
+                    }
+                }
+                if (! $sentOk && $results !== []) {
+                    Log::channel('webhook')->error('meta.webhook.send_all_failed', [
+                        'from_tail' => strlen($from) >= 4 ? substr($from, -4) : null,
+                    ]);
+                }
 
                 $this->storeExternalIds($results);
 

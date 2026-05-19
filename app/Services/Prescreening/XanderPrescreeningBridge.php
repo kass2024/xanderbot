@@ -46,6 +46,13 @@ class XanderPrescreeningBridge
         }
 
         $handled = $this->forwardToCpanel($forwardUrl, 'handle', $waPhone, $message);
+        // Only consume webhook when cPanel actually handled pre-screening (never block FAQ bot)
+        if (! $handled) {
+            WhatsAppTracker::prescreening('forward_not_handled_use_chatbot', [
+                'from' => $waPhone,
+                'reason' => $decision['reason'],
+            ]);
+        }
         if (! $handled && $this->shouldTryLocalFallback($decision)) {
             WhatsAppTracker::prescreening('forward_fallback_local', [
                 'from' => $waPhone,

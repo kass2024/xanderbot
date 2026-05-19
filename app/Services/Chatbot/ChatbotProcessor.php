@@ -181,11 +181,14 @@ class ChatbotProcessor
 
                 /*
                 |--------------------------------------------------------------------------
-                | MANDATORY PROFILE ONBOARDING
+                | Optional profile onboarding (off by default — Hello → FAQ bot)
                 |--------------------------------------------------------------------------
                 */
 
-                if (! $conversation->is_profile_completed) {
+                if (
+                    config('chatbot.require_profile_onboarding', false)
+                    && ! $conversation->is_profile_completed
+                ) {
 
                     $this->log('ONBOARDING FLOW', [
                         'step' => $conversation->profile_step,
@@ -271,13 +274,35 @@ class ChatbotProcessor
     protected function handleOnboarding(Conversation $conversation, string $message): array
     {
         $message = trim($message);
+        $conversation->refresh();
 
-        // STEP 0 → Ask Name
+        // STEP 0 → first contact
         if (! $conversation->profile_step) {
+
+            if (strlen($message) >= 3 && ! $this->messageLooksLikeGreeting($message)) {
+                $conversation->update([
+                    'customer_name' => $message,
+                    'profile_step' => 'ask_email',
+                ]);
+
+                return $this->systemReply(
+                    "Thank you {$message} 😊\nNow please provide your *email address*."
+                );
+            }
 
             $conversation->update([
                 'profile_step' => 'ask_name',
             ]);
+
+            if ($this->messageLooksLikeGreeting($message)) {
+                return $this->aiEngine->reply(
+                    (int) $conversation->client_id,
+                    $message,
+                    $conversation->fresh()
+                ) ?? $this->systemReply(
+                    "Welcome 👋\nBefore we continue, please provide your *full name*."
+                );
+            }
 
             return $this->systemReply(
                 "Welcome 👋\nBefore we continue, please provide your *full name*."
@@ -286,6 +311,14 @@ class ChatbotProcessor
 
         // STEP 1 → Save Name
         if ($conversation->profile_step === 'ask_name') {
+
+            if ($this->messageLooksLikeGreeting($message)) {
+                return $this->aiEngine->reply(
+                    (int) $conversation->client_id,
+                    $message,
+                    $conversation
+                ) ?? $this->systemReply('Please enter your full name (at least 3 characters).');
+            }
 
             if (strlen($message) < 3) {
                 return $this->systemReply('Please enter your full name.');
@@ -320,6 +353,27 @@ class ChatbotProcessor
         }
 
         return $this->systemReply('Please continue.');
+    }
+
+    protected function messageLooksLikeGreeting(string $message): bool
+    {
+        $t = strtolower(trim($message));
+        $greetings = [
+            'hi', 'hello', 'hey', 'hola', 'good morning', 'good afternoon', 'good evening',
+            'good day', 'howdy', 'sup', 'yo',
+        ];
+
+        if (in_array($t, $greetings, true)) {
+            return true;
+        }
+
+        foreach (['hello', 'hi ', 'hey ', 'good morning', 'good afternoon'] as $prefix) {
+            if (str_starts_with($t, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected function systemReply(string $text): array

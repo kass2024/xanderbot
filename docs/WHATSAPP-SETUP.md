@@ -62,11 +62,25 @@ Send **Hello** on WhatsApp — `webhook-hits.log` must show a **new** line with 
 
 `PRESCREENING_WEB_INVITE_ONLY=true` — typing "prescreening" does **not** start a form.
 
+## FAQ bot (Hello) — not pre-screening
+
+```env
+CHATBOT_REQUIRE_PROFILE_ONBOARDING=false
+```
+
+Stuck after “provide your full name” with no further replies:
+
+```bash
+php artisan whatsapp:reset-conversation 2547XXXXXXXX
+```
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
 | No new `webhook-hits.log` lines | Meta callback URL → xanderbot, or set `XANDERBOT_WEBHOOK_URL` on cPanel |
 | Only `META_SERVICE_INITIALIZED` in laravel.log | That's ads, not WhatsApp — ignore for bot |
+| One welcome then silence | `CHATBOT_REQUIRE_PROFILE_ONBOARDING=false` + reset conversation |
 | 403 on webhook | `WHATSAPP_APP_SECRET` = Meta App Secret |
 | Platform missing | `php artisan whatsapp:ensure-platform` |
+| Outbound test works, inbound silent | `tail -f storage/logs/webhook.log` — look for `send_failed` |
