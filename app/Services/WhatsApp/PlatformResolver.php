@@ -67,14 +67,16 @@ class PlatformResolver
             return null;
         }
 
-        $platform = PlatformMetaConnection::updateOrCreate(
-            ['whatsapp_phone_number_id' => $phoneId],
-            [
-                'connected_by' => $userId,
-                'whatsapp_business_id' => $wabaId !== '' ? $wabaId : null,
-                'business_id' => trim((string) env('META_AD_ACCOUNT_ID', '')) ?: null,
-            ]
+        // firstOrNew + storeAccessToken: access_token is NOT NULL — updateOrCreate alone would INSERT without it
+        $platform = PlatformMetaConnection::firstOrNew(
+            ['whatsapp_phone_number_id' => $phoneId]
         );
+
+        $platform->fill([
+            'connected_by' => $userId,
+            'whatsapp_business_id' => $wabaId !== '' ? $wabaId : null,
+            'business_id' => trim((string) env('META_AD_ACCOUNT_ID', '')) ?: null,
+        ]);
 
         $platform->storeAccessToken($token);
 
