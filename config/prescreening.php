@@ -1,17 +1,39 @@
 <?php
 
+$appUrl = rtrim((string) env('APP_URL', ''), '/');
+$defaultForward = $appUrl !== ''
+    ? $appUrl.'/api/prescreening/inbound'
+    : 'https://xanderglobalscholars.com/api/prescreening-inbound.php';
+
 return [
 
     /*
     |--------------------------------------------------------------------------
-    | Forward inbound WhatsApp to cPanel Xander (no remote DB on VPS)
+    | Mode: local = VPS legacy helpers + DB | forward = HTTP to forward_url
     |--------------------------------------------------------------------------
-    | Meta webhook stays: https://xanderbot.site/api/webhook/meta
-    | cPanel handles DB + prescreening logic at forward_url.
+    */
+    'mode' => env('PRESCREENING_MODE', 'forward'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Forward inbound WhatsApp (when mode=forward)
+    |--------------------------------------------------------------------------
+    | Default on VPS: same app /api/prescreening/inbound (not cPanel).
+    | cPanel only if you set XANDER_PRESCREENING_URL explicitly.
     */
     'forward_enabled' => filter_var(env('PRESCREENING_FORWARD_ENABLED', true), FILTER_VALIDATE_BOOL),
 
-    'forward_url' => env('XANDER_PRESCREENING_URL', 'https://xanderglobalscholars.com/api/prescreening-inbound.php'),
+    'forward_url' => env('XANDER_PRESCREENING_URL', $defaultForward),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Meta message template names (must match Business Manager)
+    |--------------------------------------------------------------------------
+    */
+    'invite_template' => env('WHATSAPP_PRESCREENING_INVITE_TEMPLATE', 'xander_prescreening_invite'),
+    'invite_template_lang' => env('WHATSAPP_PRESCREENING_INVITE_TEMPLATE_LANG', 'en_US'),
+    'received_template' => env('WHATSAPP_PRESCREENING_RECEIVED_TEMPLATE', 'xander_prescreening_received'),
+    'received_template_lang' => env('WHATSAPP_PRESCREENING_RECEIVED_TEMPLATE_LANG', 'en'),
 
     'forward_secret' => env('PRESCREENING_FORWARD_SECRET', ''),
 
@@ -30,5 +52,11 @@ return [
         : base_path('legacy/xander')),
 
     'staff_whatsapp' => env('PRESCREENING_STAFF_WHATSAPP', '12704387305,254711807646'),
+
+    /** Student text that starts pre-screening (plain chat e.g. "hello" is excluded). */
+    'triggers' => array_values(array_filter(array_map('trim', explode(',', (string) env(
+        'PRESCREENING_TRIGGERS',
+        'prescreening,pre-screening,prescreen,screening,start screening'
+    ))))),
 
 ];

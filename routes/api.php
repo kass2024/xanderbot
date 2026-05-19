@@ -1,6 +1,8 @@
 <?php
 
+use App\Http\Controllers\Api\PrescreeningInboundController;
 use App\Services\Prescreening\XanderPrescreeningBridge;
+use App\Services\WhatsApp\PlatformResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Webhooks\MetaWebhookController;
@@ -32,7 +34,7 @@ Route::get('/health', function () {
 Route::get('/webhook/diagnostic', function () {
     $envPhoneId = (string) config('services.whatsapp.phone_number_id');
     $platform = $envPhoneId !== ''
-        ? \App\Models\PlatformMetaConnection::where('whatsapp_phone_number_id', $envPhoneId)->first()
+        ? app(PlatformResolver::class)->resolve($envPhoneId)
         : null;
 
     $hitsFile = storage_path('logs/webhook-hits.log');
@@ -50,9 +52,12 @@ Route::get('/webhook/diagnostic', function () {
         'env_whatsapp_phone_number_id' => $envPhoneId,
         'platform_linked_in_db' => (bool) $platform,
         'platform_id' => $platform?->id,
+        'prescreening_mode' => config('prescreening.mode'),
         'prescreening_forward_enabled' => config('prescreening.forward_enabled'),
         'prescreening_forward_url' => config('prescreening.forward_url'),
+        'prescreening_inbound_url' => url('/api/prescreening/inbound'),
         'prescreening_forward_secret_set' => (bool) config('prescreening.forward_secret'),
+        'prescreening_invite_template' => config('prescreening.invite_template'),
         'delivery_forward_in_webhook' => str_contains(
             (string) @file_get_contents(app_path('Http/Controllers/Webhooks/MetaWebhookController.php')),
             'forwardDeliveryStatus'
@@ -75,6 +80,9 @@ Route::get('/webhook/diagnostic', function () {
 |--------------------------------------------------------------------------
 | GET /api/prescreening/forward-ping?secret=PRESCREENING_FORWARD_SECRET
 */
+Route::post('/prescreening/inbound', [PrescreeningInboundController::class, 'handle'])
+    ->name('prescreening.inbound');
+
 Route::get('/prescreening/forward-ping', function (Request $request) {
     $secret = (string) $request->query('secret', '');
     $expected = (string) config('prescreening.forward_secret');

@@ -22,6 +22,22 @@ const XANDER_WHATSAPP_PRESCREENING_TEMPLATE_NAME = 'xander_prescreening_received
 const XANDER_WHATSAPP_PRESCREENING_TEMPLATE_LANG = 'en';
 const XANDER_WHATSAPP_PRESCREENING_TEMPLATE_PARAMS = 2;
 
+function xander_prescreening_received_template_name(): string
+{
+    xander_load_env_file();
+    $n = trim((string) xander_env_get('WHATSAPP_PRESCREENING_RECEIVED_TEMPLATE'));
+
+    return $n !== '' ? $n : XANDER_WHATSAPP_PRESCREENING_TEMPLATE_NAME;
+}
+
+function xander_prescreening_received_template_lang(): string
+{
+    xander_load_env_file();
+    $n = trim((string) xander_env_get('WHATSAPP_PRESCREENING_RECEIVED_TEMPLATE_LANG'));
+
+    return $n !== '' ? $n : XANDER_WHATSAPP_PRESCREENING_TEMPLATE_LANG;
+}
+
 /** @return array<string, string> */
 function xander_prescreening_question_labels(): array
 {
@@ -281,8 +297,8 @@ function xander_send_prescreening_notifications(array $row, string $reference, b
         $to,
         $messagesUrl,
         $token,
-        XANDER_WHATSAPP_PRESCREENING_TEMPLATE_NAME,
-        XANDER_WHATSAPP_PRESCREENING_TEMPLATE_LANG,
+        xander_prescreening_received_template_name(),
+        xander_prescreening_received_template_lang(),
         XANDER_WHATSAPP_PRESCREENING_TEMPLATE_PARAMS,
         $templateTexts,
         xander_prescreening_whatsapp_session_body($row, $reference)

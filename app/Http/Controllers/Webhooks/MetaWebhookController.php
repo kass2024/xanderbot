@@ -10,6 +10,7 @@ use App\Services\Chatbot\ChatbotProcessor;
 use App\Services\Chatbot\MessageDispatcher;
 use App\Services\Chatbot\SpeechService;
 use App\Services\Prescreening\XanderPrescreeningBridge;
+use App\Services\WhatsApp\PlatformResolver;
 use App\Services\WhatsAppAudioConverter;
 use App\Support\WhatsAppTracker;
 use Illuminate\Http\Request;
@@ -26,7 +27,8 @@ class MetaWebhookController extends Controller
     public function __construct(
         protected ChatbotProcessor $processor,
         protected MessageDispatcher $dispatcher,
-        protected XanderPrescreeningBridge $prescreening
+        protected XanderPrescreeningBridge $prescreening,
+        protected PlatformResolver $platformResolver
     ) {}
 
     /*
@@ -136,16 +138,17 @@ class MetaWebhookController extends Controller
             return;
         }
 
-        $platform = PlatformMetaConnection::where(
-            'whatsapp_phone_number_id',
-            $phoneNumberId
-        )->first();
+        $platform = $this->platformResolver->resolve($phoneNumberId);
 
         if (! $platform) {
-            Log::warning('Platform not found — bot cannot reply. Link this phone in admin Meta settings.', [
+            Log::error('META_WEBHOOK_PLATFORM_MISSING', [
                 'phone_number_id' => $phoneNumberId,
                 'env_phone_id' => config('services.whatsapp.phone_number_id'),
+                'fix' => 'php artisan whatsapp:ensure-platform',
             ]);
+            WhatsAppTracker::whatsapp('platform_missing', [
+                'phone_number_id' => $phoneNumberId,
+            ], 'error');
 
             return;
         }
@@ -153,6 +156,7 @@ class MetaWebhookController extends Controller
         $clientId = $this->resolveClientId($platform);
         if (! $clientId) {
             Log::error('Webhook: client not found for platform', ['platform_id' => $platform->id]);
+            WhatsAppTracker::whatsapp('client_missing', ['platform_id' => $platform->id], 'error');
 
             return;
         }
@@ -427,12 +431,20 @@ class MetaWebhookController extends Controller
         $clientId = Client::where('user_id', $userId)->value('id');
 
         if (! $clientId) {
-            Log::error('Client not found for platform', [
-                'platform_id' => $platform->id,
-            ]);
+            $clientId = Client::query()->orderBy('id')->value('id');
+            if ($clientId) {
+                Log::warning('Webhook: using fallback client for platform', [
+                    'platform_id' => $platform->id,
+                    'client_id' => $clientId,
+                ]);
+            } else {
+                Log::error('Client not found for platform', [
+                    'platform_id' => $platform->id,
+                ]);
+            }
         }
 
-        return $clientId;
+        return $clientId ? (int) $clientId : null;
     }
 
     /*

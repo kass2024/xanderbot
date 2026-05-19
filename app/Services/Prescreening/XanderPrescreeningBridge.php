@@ -15,20 +15,19 @@ class XanderPrescreeningBridge
 {
     public function handleInbound(string $waPhone, array $message): bool
     {
+        if ($this->usesLocalPrescreening()) {
+            return $this->handlePrescreeningWhenMatched($waPhone, $message);
+        }
+
         if (! config('prescreening.forward_enabled', true)) {
             WhatsAppTracker::prescreening('forward_disabled', ['from' => $waPhone]);
 
-            return false;
+            return $this->handlePrescreeningWhenMatched($waPhone, $message);
         }
 
         $forwardUrl = trim((string) config('prescreening.forward_url'));
         if ($forwardUrl === '') {
-            WhatsAppTracker::prescreening('forward_local_fallback', [
-                'from' => $waPhone,
-                'reason' => 'empty_forward_url',
-            ]);
-
-            return $this->handleInboundLocal($waPhone, $message);
+            return $this->handlePrescreeningWhenMatched($waPhone, $message);
         }
 
         $decision = $this->forwardDecision($waPhone, $message);
@@ -44,6 +43,14 @@ class XanderPrescreeningBridge
         }
 
         $handled = $this->forwardToCpanel($forwardUrl, 'handle', $waPhone, $message);
+        if (! $handled && $this->shouldTryLocalFallback($decision)) {
+            WhatsAppTracker::prescreening('forward_fallback_local', [
+                'from' => $waPhone,
+                'reason' => $decision['reason'],
+            ], 'warning');
+            $handled = $this->processInboundLocal($waPhone, $message);
+        }
+
         WhatsAppTracker::prescreening($handled ? 'forward_handled' : 'forward_not_handled', [
             'from' => $waPhone,
             'handled' => $handled,
@@ -53,6 +60,70 @@ class XanderPrescreeningBridge
         ], $handled ? 'info' : 'warning');
 
         return $handled;
+    }
+
+    /**
+     * Only run pre-screening when triggers/session match (never steal plain "hello").
+     */
+    protected function handlePrescreeningWhenMatched(string $waPhone, array $message): bool
+    {
+        $decision = $this->forwardDecision($waPhone, $message);
+        if (! $decision['forward']) {
+            return false;
+        }
+
+        return $this->processInboundLocal($waPhone, $message);
+    }
+
+    protected function usesLocalPrescreening(): bool
+    {
+        return strtolower((string) config('prescreening.mode', 'forward')) === 'local';
+    }
+
+    /**
+     * @param  array{forward:bool,reason:string,text:string}  $decision
+     */
+    protected function shouldTryLocalFallback(array $decision): bool
+    {
+        if ($this->usesLocalPrescreening()) {
+            return true;
+        }
+
+        return in_array($decision['reason'], [
+            'keyword_trigger',
+            'button_start',
+            'button_cancel',
+            'ongoing_session',
+            'media_active_session',
+        ], true);
+    }
+
+    /** @return array{active:bool,step:?string} */
+    public function activeSessionInfo(string $waPhone): array
+    {
+        if (! $this->bootLocal()) {
+            return ['active' => false, 'step' => null];
+        }
+        $conn = $this->connection();
+        if (! $conn || ! function_exists('xander_prescreening_load_session')) {
+            return ['active' => false, 'step' => null];
+        }
+        xander_ensure_prescreening_whatsapp_tables($conn);
+        $row = xander_prescreening_load_session($conn, $waPhone);
+        if (! $row) {
+            return ['active' => false, 'step' => 'idle'];
+        }
+        $step = (string) ($row['current_step'] ?? 'idle');
+
+        return [
+            'active' => $step !== 'idle',
+            'step' => $step,
+        ];
+    }
+
+    public function processInboundLocal(string $waPhone, array $message): bool
+    {
+        return $this->handleInboundLocal($waPhone, $message);
     }
 
     /**
@@ -103,6 +174,10 @@ class XanderPrescreeningBridge
 
     public function hasActiveSession(string $waPhone): bool
     {
+        if ($this->usesLocalPrescreening()) {
+            return $this->hasActiveSessionLocal($waPhone);
+        }
+
         $forwardUrl = trim((string) config('prescreening.forward_url'));
         if ($forwardUrl === '' || ! config('prescreening.forward_enabled', true)) {
             return $this->hasActiveSessionLocal($waPhone);
@@ -170,8 +245,12 @@ class XanderPrescreeningBridge
         if ($t === '') {
             return false;
         }
-        foreach (['prescreening', 'pre-screening', 'prescreen', 'screening', 'start screening'] as $trigger) {
-            if ($t === $trigger || str_contains($t, $trigger)) {
+        $triggers = config('prescreening.triggers', [
+            'prescreening', 'pre-screening', 'prescreen', 'screening', 'start screening',
+        ]);
+        foreach ($triggers as $trigger) {
+            $trigger = strtolower(trim((string) $trigger));
+            if ($trigger !== '' && ($t === $trigger || str_contains($t, $trigger))) {
                 return true;
             }
         }
@@ -280,12 +359,20 @@ class XanderPrescreeningBridge
     protected function handleInboundLocal(string $waPhone, array $message): bool
     {
         if (! $this->bootLocal()) {
+            WhatsAppTracker::prescreening('local_boot_failed', ['from' => $waPhone], 'error');
+
             return false;
         }
 
         $conn = $this->connection();
         if (! $conn) {
+            WhatsAppTracker::prescreening('local_db_failed', ['from' => $waPhone], 'error');
+
             return false;
+        }
+
+        if (function_exists('xander_ensure_prescreening_whatsapp_tables')) {
+            xander_ensure_prescreening_whatsapp_tables($conn);
         }
 
         try {

@@ -18,6 +18,22 @@ const XANDER_WHATSAPP_PRESCREENING_INVITE_TEMPLATE = 'xander_prescreening_invite
 /** Match the language you chose in Meta (English → often en or en_US). */
 const XANDER_WHATSAPP_PRESCREENING_INVITE_TEMPLATE_LANG = 'en_US';
 
+function xander_prescreening_invite_template_name(): string
+{
+    xander_load_env_file();
+    $n = trim((string) xander_env_get('WHATSAPP_PRESCREENING_INVITE_TEMPLATE'));
+
+    return $n !== '' ? $n : XANDER_WHATSAPP_PRESCREENING_INVITE_TEMPLATE;
+}
+
+function xander_prescreening_invite_template_lang(): string
+{
+    xander_load_env_file();
+    $n = trim((string) xander_env_get('WHATSAPP_PRESCREENING_INVITE_TEMPLATE_LANG'));
+
+    return $n !== '' ? $n : XANDER_WHATSAPP_PRESCREENING_INVITE_TEMPLATE_LANG;
+}
+
 /** @return array<int, array{key:string,prompt:string,hint?:string}> */
 function xander_prescreening_whatsapp_question_steps(): array
 {
@@ -240,8 +256,8 @@ function xander_prescreening_admin_send_invite(mysqli $conn, string $phoneRaw, s
         $to,
         $api['url'],
         $api['token'],
-        XANDER_WHATSAPP_PRESCREENING_INVITE_TEMPLATE,
-        XANDER_WHATSAPP_PRESCREENING_INVITE_TEMPLATE_LANG,
+        xander_prescreening_invite_template_name(),
+        xander_prescreening_invite_template_lang(),
         1,
         [$name],
         $fallback
