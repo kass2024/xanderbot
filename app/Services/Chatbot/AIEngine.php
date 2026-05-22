@@ -12,9 +12,9 @@ class AIEngine
 {
     protected string $model;
 
-    // Tunable thresholds
-    protected float $faqThreshold = 0.60;
-    protected float $groundThreshold = 0.40;
+    // Tunable thresholds - Lowered to use AI more readily
+    protected float $faqThreshold = 0.75;
+    protected float $groundThreshold = 0.50;
     protected int $candidateLimit = 5;
     protected int $timeout = 30;
 
@@ -597,10 +597,25 @@ class AIEngine
 
     protected function handlePureAI(int $clientId, string $hash, string $message, string $requestId): array
     {
-        $prompt = "You are a helpful visa and education consultant assistant for Xander Global Scholars. 
-Provide professional, friendly responses about visa services, study abroad programs, and educational opportunities.
+        $prompt = "You are a professional visa and education consultant working for Xander Global Scholars, a reputable education consultancy.
 
-User: $message";
+Your role is to provide accurate, helpful information about:
+- Student visa applications and requirements for various countries
+- Study abroad programs and university applications
+- Scholarship opportunities and financial aid
+- Education consultancy services
+- Application processes and document requirements
+- Country-specific immigration information
+
+Guidelines:
+1. Be professional, friendly, and helpful
+2. Provide accurate and up-to-date information
+3. If you're not certain about specific requirements, recommend checking official sources
+4. Suggest consulting with our expert consultants for complex cases
+5. Keep responses comprehensive but easy to understand
+6. Mention our services when relevant
+
+User question: $message";
 
         $answer = $this->callOpenAI($prompt, $requestId);
 
@@ -608,14 +623,16 @@ User: $message";
             $clientId,
             $hash,
             $this->formatResponse(
-                $answer ?? "I'm here to help with visa and study abroad questions! You can ask me about:
-• Student visa requirements
-• Study programs abroad  
-• Application processes
-• Scholarship opportunities
-• Our consultancy services
+                $answer ?? "I'm here to help with your visa and study abroad questions! Xander Global Scholars provides comprehensive consultancy services for international education.
 
-For specific assistance, please contact our team directly.",
+I can assist with information about:
+• Student visa requirements and applications
+• Study abroad programs and universities
+• Scholarship opportunities
+• Application processes and required documents
+• Country-specific guidance
+
+For personalized assistance with your specific situation, I recommend consulting with our expert education consultants who can provide tailored guidance for your goals.",
                 [],
                 0.50,
                 'pure_ai'
@@ -678,17 +695,29 @@ Provide the best possible helpful answer using the information above.
     protected function callOpenAI(string $prompt, string $requestId): ?string
     {
         try {
-            $response = Http::withToken(config('services.openai.key'))
+            $apiKey = config('services.openai.key');
+            
+            if (!$apiKey) {
+                Log::error('OPENAI_KEY_MISSING', [
+                    'request_id' => $requestId
+                ]);
+                return null;
+            }
+
+            $response = Http::withToken($apiKey)
                 ->timeout($this->timeout)
                 ->retry(2, 500)
                 ->post('https://api.openai.com/v1/chat/completions', [
                     'model' => $this->model,
                     'messages' => [
-                        ['role' => 'system', 'content' => 'You are a helpful visa consultant.'],
+                        [
+                            'role' => 'system', 
+                            'content' => 'You are a professional visa and education consultant for Xander Global Scholars. Provide accurate, helpful, and detailed responses about visa services, study abroad programs, and educational opportunities. Always be professional and friendly. If you are not certain about specific visa requirements, advise users to consult with official sources or our expert consultants.'
+                        ],
                         ['role' => 'user', 'content' => $prompt]
                     ],
                     'temperature' => 0.3,
-                    'max_tokens' => 500
+                    'max_tokens' => 800
                 ]);
 
             if ($response->failed()) {
@@ -701,7 +730,16 @@ Provide the best possible helpful answer using the information above.
             }
 
             $json = $response->json();
-            return $json['choices'][0]['message']['content'] ?? null;
+            $content = $json['choices'][0]['message']['content'] ?? null;
+            
+            if ($content) {
+                Log::info('OPENAI_SUCCESS', [
+                    'response_preview' => substr($content, 0, 100),
+                    'request_id' => $requestId
+                ]);
+            }
+
+            return $content;
 
         } catch (\Throwable $e) {
             Log::error('OpenAI ERROR', [

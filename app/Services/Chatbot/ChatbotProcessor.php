@@ -273,9 +273,15 @@ class ChatbotProcessor
         $message = trim($message);
         $conversation->refresh();
 
-        // STEP 0 → first contact
+        // STEP 0 → first contact - ALWAYS ask for name first
         if (! $conversation->profile_step) {
 
+            // Set the step to ask_name immediately
+            $conversation->update([
+                'profile_step' => 'ask_name',
+            ]);
+
+            // If user provides a name directly (not a greeting)
             if (strlen($message) >= 3 && ! $this->messageLooksLikeGreeting($message)) {
                 $conversation->update([
                     'customer_name' => $message,
@@ -287,34 +293,18 @@ class ChatbotProcessor
                 );
             }
 
-            $conversation->update([
-                'profile_step' => 'ask_name',
-            ]);
-
-            if ($this->messageLooksLikeGreeting($message)) {
-                return $this->aiEngine->reply(
-                    (int) $conversation->client_id,
-                    $message,
-                    $conversation->fresh()
-                ) ?? $this->systemReply(
-                    "Welcome 👋\nBefore we continue, please provide your *full name*."
-                );
-            }
-
+            // Always ask for name - NO AI responses during onboarding
             return $this->systemReply(
-                "Welcome 👋\nBefore we continue, please provide your *full name*."
+                "Welcome to Xander Global Scholars! 👋\n\nBefore we continue, please provide your *full name*."
             );
         }
 
-        // STEP 1 → Save Name
+        // STEP 1 → Ask for Name
         if ($conversation->profile_step === 'ask_name') {
 
+            // If it's a greeting, just ask for name again
             if ($this->messageLooksLikeGreeting($message)) {
-                return $this->aiEngine->reply(
-                    (int) $conversation->client_id,
-                    $message,
-                    $conversation
-                ) ?? $this->systemReply('Please enter your full name (at least 3 characters).');
+                return $this->systemReply('Hello! Please provide your *full name* to get started.');
             }
 
             if (strlen($message) < 3) {
@@ -345,7 +335,7 @@ class ChatbotProcessor
             ]);
 
             return $this->systemReply(
-                '✅ Thank you! You can now ask your questions.'
+                '✅ Thank you! Your profile is complete.\n\nI\'m now ready to help you with:\n• Student visa applications\n• Study abroad programs\n• Scholarship opportunities\n• University applications\n• And much more!\n\nWhat would you like to know?'
             );
         }
 
