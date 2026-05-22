@@ -9,7 +9,6 @@ use App\Models\PlatformMetaConnection;
 use App\Services\Chatbot\ChatbotProcessor;
 use App\Services\Chatbot\MessageDispatcher;
 use App\Services\Chatbot\SpeechService;
-use App\Services\Prescreening\XanderPrescreeningBridge;
 use App\Services\WhatsApp\PlatformResolver;
 use App\Services\WhatsAppAudioConverter;
 use App\Support\WhatsAppTracker;
@@ -27,7 +26,6 @@ class MetaWebhookController extends Controller
     public function __construct(
         protected ChatbotProcessor $processor,
         protected MessageDispatcher $dispatcher,
-        protected XanderPrescreeningBridge $prescreening,
         protected PlatformResolver $platformResolver
     ) {}
 
@@ -208,13 +206,6 @@ class MetaWebhookController extends Controller
                 'message_id' => $messageId,
                 'text_preview' => mb_substr($this->extractInboundPayload($incoming)['text'] ?? '', 0, 120),
             ]);
-
-            // Pre-screening only when web admin already sent invite (separate from FAQ bot)
-            if ($this->prescreening->handleInbound($from, $incoming)) {
-                WhatsAppTracker::prescreening('webhook_routed_prescreening', ['from' => $from, 'message_id' => $messageId]);
-
-                continue;
-            }
 
             WhatsAppTracker::whatsapp('webhook_routed_chatbot', ['from' => $from, 'message_id' => $messageId]);
 
@@ -445,15 +436,6 @@ class MetaWebhookController extends Controller
                 WhatsAppTracker::whatsapp('delivery_'.$delivery, $logCtx);
             } else {
                 WhatsAppTracker::whatsapp('delivery_status', $logCtx);
-            }
-
-            try {
-                $this->prescreening->forwardDeliveryStatus($status);
-            } catch (\Throwable $e) {
-                Log::warning('Prescreening delivery forward failed', [
-                    'error' => $e->getMessage(),
-                    'external_id' => $externalId,
-                ]);
             }
         }
     }

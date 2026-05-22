@@ -27,13 +27,11 @@ class WhatsAppEnvCheck extends Command
             'WHATSAPP_APP_SECRET' => config('services.whatsapp_webhook.app_secret') ? '[set]' : '',
             'CHATBOT_REQUIRE_PROFILE_ONBOARDING' => config('chatbot.require_profile_onboarding') ? 'true' : 'false',
             'QUEUE_CONNECTION' => config('queue.default'),
-            'PRESCREENING_FORWARD_SECRET' => config('prescreening.forward_secret') ? '[set]' : '',
-            'XANDER_PRESCREENING_URL' => config('prescreening.forward_url'),
         ];
 
         foreach ($checks as $key => $value) {
             $empty = $value === '' || $value === null;
-            if ($empty && ! in_array($key, ['PRESCREENING_FORWARD_SECRET'], true)) {
+            if ($empty) {
                 $this->error("MISSING: {$key}");
                 $ok = false;
             } else {

@@ -6,10 +6,11 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
- * Structured WhatsApp + pre-screening tracking (dedicated log files).
+ * Structured WhatsApp tracking (dedicated daily log files).
  *
  * tail -f storage/logs/whatsapp-$(date +%Y-%m-%d).log
- * tail -f storage/logs/prescreening-$(date +%Y-%m-%d).log
+ *
+ * Pre-screening tracking lives in the cPanel Xander project, not here.
  */
 final class WhatsAppTracker
 {
@@ -19,7 +20,7 @@ final class WhatsAppTracker
     }
 
     /**
-     * @param  'whatsapp'|'prescreening'  $channel
+     * @param  'whatsapp'  $channel
      * @param  array<string, mixed>  $context
      */
     public static function log(string $channel, string $action, array $context = [], string $level = 'info'): void
@@ -44,11 +45,6 @@ final class WhatsAppTracker
     public static function whatsapp(string $action, array $context = [], string $level = 'info'): void
     {
         self::log('whatsapp', $action, $context, $level);
-    }
-
-    public static function prescreening(string $action, array $context = [], string $level = 'info'): void
-    {
-        self::log('prescreening', $action, $context, $level);
     }
 
     /**
