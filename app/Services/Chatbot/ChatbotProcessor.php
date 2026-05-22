@@ -181,14 +181,11 @@ class ChatbotProcessor
 
                 /*
                 |--------------------------------------------------------------------------
-                | Optional profile onboarding (off by default — Hello → FAQ bot)
+                | Profile onboarding - Always collect name and email first
                 |--------------------------------------------------------------------------
                 */
 
-                if (
-                    config('chatbot.require_profile_onboarding', false)
-                    && ! $conversation->is_profile_completed
-                ) {
+                if (! $conversation->is_profile_completed) {
 
                     $this->log('ONBOARDING FLOW', [
                         'step' => $conversation->profile_step,

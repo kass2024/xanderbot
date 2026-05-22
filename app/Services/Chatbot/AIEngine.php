@@ -597,7 +597,10 @@ class AIEngine
 
     protected function handlePureAI(int $clientId, string $hash, string $message, string $requestId): array
     {
-        $prompt = "You are a professional visa assistant.\n\nUser: $message";
+        $prompt = "You are a helpful visa and education consultant assistant for Xander Global Scholars. 
+Provide professional, friendly responses about visa services, study abroad programs, and educational opportunities.
+
+User: $message";
 
         $answer = $this->callOpenAI($prompt, $requestId);
 
@@ -605,7 +608,14 @@ class AIEngine
             $clientId,
             $hash,
             $this->formatResponse(
-                $answer ?? 'Please contact support.',
+                $answer ?? "I'm here to help with visa and study abroad questions! You can ask me about:
+• Student visa requirements
+• Study programs abroad  
+• Application processes
+• Scholarship opportunities
+• Our consultancy services
+
+For specific assistance, please contact our team directly.",
                 [],
                 0.50,
                 'pure_ai'
@@ -656,7 +666,7 @@ Provide the best possible helpful answer using the information above.
         $answer = $this->callOpenAI($prompt, $requestId);
 
         $response = $this->formatResponse(
-            $answer ?? 'Please contact support.',
+            $answer ?? "Based on available information, I can help with visa and study abroad services. For detailed guidance, please contact our expert consultants.",
             $candidates[0]['knowledge']->attachments ?? [],
             0.65,
             'grounded_ai'
@@ -850,7 +860,7 @@ Provide the best possible helpful answer using the information above.
     protected function greetingResponse(): array
     {
         return [
-            'text' => "Hello! 👋 I'm your virtual assistant from xanderglobalscholars.\n\nHow can I help you today? You can ask me about:\n• Visa requirements\n• Study abroad programs\n• Our services\n• Application process\n• Scholarships\n\nOr type 'talk to human' to speak with a real agent.",
+            'text' => "Hello! 👋 Welcome to Xander Global Scholars!\n\nI'm your virtual assistant for visa and education services. I can help you with:\n\n📋 **Student Visa Requirements**\n🎓 **Study Abroad Programs**\n🏛️ **University Applications**\n💰 **Scholarship Opportunities**\n📝 **Application Processes**\n🌍 **Country-specific Guidance**\n\nJust ask me anything about studying abroad or visa services!\n\nNeed to speak to a human? Type 'talk to human' anytime.",
             'attachments' => [],
             'confidence' => 1.0,
             'source' => 'greeting'
