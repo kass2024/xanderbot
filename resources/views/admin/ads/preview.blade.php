@@ -54,12 +54,6 @@
         </span>
     </div>
 
-    @if(!empty($ig['delivery_warning']))
-        <div class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-900">
-            {{ $ig['delivery_warning'] }}
-        </div>
-    @endif
-
     <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
         <div class="rounded-xl bg-gray-50 p-4">
             <p class="text-xs text-gray-500">Facebook impressions</p>

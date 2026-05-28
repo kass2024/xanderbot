@@ -955,7 +955,7 @@ class InstagramDeliveryService
         } elseif ($markedEnabled || $configuredOnMeta || $metaCreativeHasIg === true) {
             $status = 'enabled';
             $statusLabel = 'IG enabled on Meta — waiting for impressions';
-            if ($igImpressionsRecent === 0 && $igImpressionsLifetime === 0) {
+            if (! $forUi && $igImpressionsRecent === 0 && $igImpressionsLifetime === 0) {
                 if ($anImpressions > 0 && $fbImpressions > 0) {
                     $deliveryWarning = 'Instagram 0 but Facebook/Audience Network have impressions. '
                         .'Run once: php artisan meta:enable-instagram --reprovision (creates new Meta ads on legacy ad sets, pauses old ads). '
