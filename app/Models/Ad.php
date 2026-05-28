@@ -60,6 +60,7 @@ protected $fillable = [
     'creative_id',
 
     'meta_ad_id',
+    'previous_meta_ad_ids',
 
     'name',
     'status',
@@ -92,9 +93,8 @@ protected $fillable = [
         'impressions' => 0,
         'clicks' => 0,
         'spend' => 0,
-        'ctr' => 0
+        'ctr' => 0,
     ];
-
 
     /*
     |--------------------------------------------------------------------------
@@ -102,19 +102,17 @@ protected $fillable = [
     |--------------------------------------------------------------------------
     */
     protected $casts = [
-
+        'previous_meta_ad_ids' => 'array',
         'instagram_enabled_at' => 'datetime',
-
         'daily_budget' => 'float',
-    'daily_spend' => 'float',
-    'daily_spend_anchor' => 'float',
-    'spend_date' => 'date',
-
-    'impressions' => 'integer',
-    'clicks' => 'integer',
-    'spend' => 'float',
-    'ctr' => 'float'
-];
+        'daily_spend' => 'float',
+        'daily_spend_anchor' => 'float',
+        'spend_date' => 'date',
+        'impressions' => 'integer',
+        'clicks' => 'integer',
+        'spend' => 'float',
+        'ctr' => 'float',
+    ];
 
 
     /*

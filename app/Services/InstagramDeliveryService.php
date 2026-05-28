@@ -377,7 +377,17 @@ class InstagramDeliveryService
             throw new Exception('Meta did not return a new ad id during reprovision.');
         }
 
-        $ad->update(['meta_ad_id' => $newMetaAdId]);
+        $previous = is_array($ad->previous_meta_ad_ids) ? $ad->previous_meta_ad_ids : [];
+        if ($oldMetaAdId !== '') {
+            $previous[] = $oldMetaAdId;
+        }
+
+        $payload = ['meta_ad_id' => $newMetaAdId];
+        if (\Illuminate\Support\Facades\Schema::hasColumn('ads', 'previous_meta_ad_ids')) {
+            $payload['previous_meta_ad_ids'] = array_values(array_unique($previous));
+        }
+
+        $ad->update($payload);
 
         try {
             $this->meta->updateAd($oldMetaAdId, ['status' => 'PAUSED']);

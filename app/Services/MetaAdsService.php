@@ -1794,7 +1794,7 @@ public function getAdInsightsMap(?string $accountId = null, string $preset = 'ma
 {
     $accountId = $this->formatAccount($accountId ?? config('services.meta.ad_account_id'));
 
-    $response = $this->get("{$accountId}/insights", [
+    $rows = $this->collectPagedData("{$accountId}/insights", [
         'level' => 'ad',
         'fields' => implode(',', [
             'ad_id',
@@ -1809,7 +1809,7 @@ public function getAdInsightsMap(?string $accountId = null, string $preset = 'ma
 
     $map = [];
 
-    foreach ($response['data'] ?? [] as $row) {
+    foreach ($rows as $row) {
         $adId = (string) ($row['ad_id'] ?? '');
 
         if ($adId !== '') {
@@ -1818,6 +1818,21 @@ public function getAdInsightsMap(?string $accountId = null, string $preset = 'ma
     }
 
     return $map;
+}
+
+/**
+ * All ads in the ad account (paginated).
+ *
+ * @return list<array<string, mixed>>
+ */
+public function listAccountAds(?string $accountId = null): array
+{
+    $accountId = $this->formatAccount($accountId ?? config('services.meta.ad_account_id'));
+
+    return $this->collectPagedData("{$accountId}/ads", [
+        'fields' => 'id,name,status,effective_status,adset_id',
+        'limit' => 500,
+    ]);
 }
 
 /**

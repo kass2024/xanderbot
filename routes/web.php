@@ -409,6 +409,9 @@ Route::middleware(['auth','verified','role:admin'])
             Route::post('{ad}/publish', [AdController::class, 'publish'])
                 ->name('publish');
 
+            Route::post('resync-metrics', [AdController::class, 'resyncMetricsAll'])
+                ->name('resync-metrics');
+
             Route::post('enable-instagram-all', [AdController::class, 'enableInstagramAll'])
                 ->name('enable-instagram-all');
 

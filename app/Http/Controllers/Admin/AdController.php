@@ -83,10 +83,213 @@ class AdController extends Controller
     protected function applyPlacementDeliveryToAds(iterable $ads, array $placementMap): void
     {
         foreach ($ads as $ad) {
-            $metaId = (string) ($ad->meta_ad_id ?? '');
-            $delivery = $metaId !== '' ? ($placementMap[$metaId] ?? []) : [];
-            $ad->setAttribute('placement_delivery', $delivery);
+            $ad->setAttribute('placement_delivery', $this->mergedPlacementDeliveryForAd($ad, $placementMap));
         }
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function metaAdIdsForMetrics(Ad $ad): array
+    {
+        $ids = [];
+
+        if (! empty($ad->meta_ad_id)) {
+            $ids[] = (string) $ad->meta_ad_id;
+        }
+
+        foreach (is_array($ad->previous_meta_ad_ids) ? $ad->previous_meta_ad_ids : [] as $legacyId) {
+            $legacyId = (string) $legacyId;
+
+            if ($legacyId !== '' && ! in_array($legacyId, $ids, true)) {
+                $ids[] = $legacyId;
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     * @return array{impressions: int, clicks: int, spend: float, ctr: float}|null
+     */
+    protected function combineInsightRows(array $rows): ?array
+    {
+        if ($rows === []) {
+            return null;
+        }
+
+        $impressions = 0;
+        $clicks = 0;
+        $spend = 0.0;
+
+        foreach ($rows as $row) {
+            $impressions += (int) ($row['impressions'] ?? 0);
+            $clicks += (int) ($row['clicks'] ?? 0);
+            $spend += $this->parseInsightMetric($row, 'spend');
+        }
+
+        if ($impressions === 0 && $clicks === 0 && $spend <= 0.00001) {
+            return null;
+        }
+
+        return [
+            'impressions' => $impressions,
+            'clicks' => $clicks,
+            'spend' => $spend,
+            'ctr' => $impressions > 0
+                ? round(($clicks / $impressions) * 100, 2)
+                : 0.0,
+        ];
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $map
+     * @return array<string, mixed>|null
+     */
+    protected function insightsRowForAdFromMap(Ad $ad, array $map): ?array
+    {
+        $rows = [];
+
+        foreach ($this->metaAdIdsForMetrics($ad) as $metaId) {
+            if (isset($map[$metaId])) {
+                $rows[] = $map[$metaId];
+            }
+        }
+
+        return $this->combineInsightRows(array_map(fn (array $row) => [
+            'impressions' => (int) ($row['impressions'] ?? 0),
+            'clicks' => (int) ($row['clicks'] ?? 0),
+            'spend' => $this->parseInsightMetric($row, 'spend'),
+        ], $rows));
+    }
+
+    /**
+     * @param  array<string, array<string, array{impressions: int, clicks: int, spend: float}>>  $placementMap
+     * @return array<string, array{impressions: int, clicks: int, spend: float}>
+     */
+    protected function mergedPlacementDeliveryForAd(Ad $ad, array $placementMap): array
+    {
+        $merged = [];
+
+        foreach ($this->metaAdIdsForMetrics($ad) as $metaId) {
+            foreach ($placementMap[$metaId] ?? [] as $platform => $row) {
+                if (! isset($merged[$platform])) {
+                    $merged[$platform] = [
+                        'impressions' => 0,
+                        'clicks' => 0,
+                        'spend' => 0.0,
+                    ];
+                }
+
+                $merged[$platform]['impressions'] += (int) ($row['impressions'] ?? 0);
+                $merged[$platform]['clicks'] += (int) ($row['clicks'] ?? 0);
+                $merged[$platform]['spend'] += (float) ($row['spend'] ?? 0);
+            }
+        }
+
+        return $merged;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $lifetimeMap
+     * @param  list<array<string, mixed>>|null  $accountAds
+     * @return list<string>
+     */
+    protected function discoverPreviousMetaAdIds(Ad $ad, array $lifetimeMap, ?array $accountAds = null): array
+    {
+        $existing = is_array($ad->previous_meta_ad_ids) ? $ad->previous_meta_ad_ids : [];
+
+        $ad->loadMissing('adSet');
+
+        $adsetMetaId = (string) ($ad->adSet?->meta_id ?? '');
+        $currentId = (string) ($ad->meta_ad_id ?? '');
+
+        if ($adsetMetaId === '' || $currentId === '') {
+            return array_values(array_unique($existing));
+        }
+
+        if ($accountAds === null) {
+            $accountId = $this->resolveMetaAccountIdForAd($ad);
+            $accountAds = $accountId ? $this->meta->listAccountAds($accountId) : [];
+        }
+
+        $discovered = [];
+
+        foreach ($accountAds as $metaAd) {
+            $id = (string) ($metaAd['id'] ?? '');
+
+            if ($id === '' || $id === $currentId) {
+                continue;
+            }
+
+            if ((string) ($metaAd['adset_id'] ?? '') !== $adsetMetaId) {
+                continue;
+            }
+
+            $status = strtoupper((string) ($metaAd['status'] ?? $metaAd['effective_status'] ?? ''));
+
+            if (! in_array($status, ['PAUSED', 'ARCHIVED', 'DELETED'], true)) {
+                continue;
+            }
+
+            $row = $lifetimeMap[$id] ?? null;
+            $imp = (int) ($row['impressions'] ?? 0);
+            $spend = (float) ($row['spend'] ?? 0);
+
+            if ($imp > 0 || $spend > 0.00001) {
+                $discovered[] = $id;
+            }
+        }
+
+        return array_values(array_unique(array_merge($existing, $discovered)));
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $lifetimeMap
+     * @param  array<string, list<array<string, mixed>>>  $accountAdsCache
+     */
+    protected function ensurePreviousMetaAdIdsStored(Ad $ad, array $lifetimeMap, array &$accountAdsCache): void
+    {
+        if (! Schema::hasColumn('ads', 'previous_meta_ad_ids')) {
+            return;
+        }
+
+        $combined = $this->insightsRowForAdFromMap($ad, $lifetimeMap);
+        $storedImp = (int) ($ad->impressions ?? 0);
+        $storedSpend = (float) ($ad->spend ?? 0);
+        $combinedImp = (int) ($combined['impressions'] ?? 0);
+
+        $needsDiscover = $storedImp < 50 && $storedSpend < 0.5
+            && $combinedImp < max(50, $storedImp + 10);
+
+        if (! $needsDiscover && ! empty($ad->previous_meta_ad_ids)) {
+            return;
+        }
+
+        $accountId = $this->resolveMetaAccountIdForAd($ad);
+
+        if (! $accountId) {
+            return;
+        }
+
+        if (! isset($accountAdsCache[$accountId])) {
+            try {
+                $accountAdsCache[$accountId] = $this->meta->listAccountAds($accountId);
+            } catch (Throwable $e) {
+                Log::warning('META_LIST_ADS_FAILED', ['error' => $e->getMessage()]);
+                $accountAdsCache[$accountId] = [];
+            }
+        }
+
+        $discovered = $this->discoverPreviousMetaAdIds($ad, $lifetimeMap, $accountAdsCache[$accountId]);
+
+        if ($discovered === (is_array($ad->previous_meta_ad_ids) ? $ad->previous_meta_ad_ids : [])) {
+            return;
+        }
+
+        $ad->previous_meta_ad_ids = $discovered;
+        $ad->save();
     }
 
     /**
@@ -111,29 +314,64 @@ class AdController extends Controller
      */
     protected function fetchMetaLifetimeMetrics(Ad $ad): ?array
     {
-        if (empty($ad->meta_ad_id)) {
+        if ($this->metaAdIdsForMetrics($ad) === []) {
             return null;
         }
 
-        try {
-            $base = $this->meta->getInsights((string) $ad->meta_ad_id, 'maximum');
-        } catch (Throwable $e) {
-            Log::warning('META_LIFETIME_METRICS_FAILED', [
-                'ad_id' => $ad->id,
-                'error' => $e->getMessage(),
-            ]);
+        $accountId = $this->resolveMetaAccountIdForAd($ad);
 
-            return null;
+        if ($accountId) {
+            try {
+                $map = $this->meta->getAdInsightsMap($accountId, 'maximum');
+                $row = $this->insightsRowForAdFromMap($ad, $map);
+
+                if ($row !== null) {
+                    return [
+                        'impressions' => (int) $row['impressions'],
+                        'clicks' => (int) $row['clicks'],
+                        'spend' => (float) $row['spend'],
+                    ];
+                }
+            } catch (Throwable $e) {
+                Log::warning('META_LIFETIME_MAP_FAILED', [
+                    'ad_id' => $ad->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
-        if ($base === []) {
+        $rows = [];
+
+        foreach ($this->metaAdIdsForMetrics($ad) as $metaId) {
+            try {
+                $base = $this->meta->getInsights($metaId, 'maximum');
+
+                if ($base !== []) {
+                    $rows[] = [
+                        'impressions' => (int) ($base['impressions'] ?? 0),
+                        'clicks' => (int) ($base['clicks'] ?? 0),
+                        'spend' => $this->parseInsightMetric($base, 'spend'),
+                    ];
+                }
+            } catch (Throwable $e) {
+                Log::warning('META_LIFETIME_METRICS_FAILED', [
+                    'ad_id' => $ad->id,
+                    'meta_ad_id' => $metaId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $combined = $this->combineInsightRows($rows);
+
+        if ($combined === null) {
             return null;
         }
 
         return [
-            'impressions' => (int) ($base['impressions'] ?? 0),
-            'clicks' => (int) ($base['clicks'] ?? 0),
-            'spend' => $this->parseInsightMetric($base, 'spend'),
+            'impressions' => (int) $combined['impressions'],
+            'clicks' => (int) $combined['clicks'],
+            'spend' => (float) $combined['spend'],
         ];
     }
 
@@ -249,14 +487,84 @@ class AdController extends Controller
     protected function applyMetaInsightsToAds(iterable $ads, array $lifetime, array $today, bool $enforceBudget = true): void
     {
         foreach ($ads as $ad) {
-            $metaId = (string) $ad->meta_ad_id;
             $this->persistAdMetricsFromMeta(
                 $ad,
-                $lifetime[$metaId] ?? null,
-                $today[$metaId] ?? null,
+                $this->insightsRowForAdFromMap($ad, $lifetime),
+                $this->insightsRowForAdFromMap($ad, $today),
                 $enforceBudget
             );
         }
+    }
+
+    /**
+     * @param  iterable<Ad>  $ads
+     * @return array{updated: int, discovered: int, skipped: int, rows: list<array<string, mixed>>}
+     */
+    public function resyncMetricsFromMeta(iterable $ads, bool $discover = true): array
+    {
+        $ads = collect($ads)->filter(fn (Ad $ad) => $ad->meta_ad_id);
+
+        $stats = ['updated' => 0, 'discovered' => 0, 'skipped' => 0, 'rows' => []];
+
+        if ($ads->isEmpty()) {
+            return $stats;
+        }
+
+        $byAccount = [];
+
+        foreach ($ads as $ad) {
+            $accountId = $this->resolveMetaAccountIdForAd($ad) ?? $this->resolveMetaAccountId();
+
+            if ($accountId) {
+                $byAccount[$accountId][] = $ad;
+            }
+        }
+
+        foreach ($byAccount as $accountId => $group) {
+            Cache::forget('meta_ad_insights_maps:'.md5($accountId));
+            Cache::forget('meta_ad_placement_maps:'.md5($accountId.':maximum'));
+            Cache::forget('meta_ad_placement_maps:'.md5($accountId.':today'));
+
+            $maps = $this->metaInsightsMaps($accountId);
+            $lifetime = $maps['lifetime'] ?? [];
+            $today = $maps['today'] ?? [];
+            $accountAdsCache = [];
+
+            foreach ($group as $ad) {
+                if ($discover) {
+                    $before = is_array($ad->previous_meta_ad_ids) ? count($ad->previous_meta_ad_ids) : 0;
+                    $this->ensurePreviousMetaAdIdsStored($ad, $lifetime, $accountAdsCache);
+                    $after = is_array($ad->previous_meta_ad_ids) ? count($ad->previous_meta_ad_ids) : 0;
+
+                    if ($after > $before) {
+                        $stats['discovered']++;
+                    }
+                }
+
+                $lifetimeRow = $this->insightsRowForAdFromMap($ad, $lifetime);
+                $todayRow = $this->insightsRowForAdFromMap($ad, $today);
+
+                if ($lifetimeRow === null && $todayRow === null) {
+                    $stats['skipped']++;
+
+                    continue;
+                }
+
+                $this->persistAdMetricsFromMeta($ad, $lifetimeRow, $todayRow, false);
+                $ad->refresh();
+
+                $stats['updated']++;
+                $stats['rows'][] = [
+                    'id' => $ad->id,
+                    'name' => $ad->name,
+                    'impressions' => (int) $ad->impressions,
+                    'spend' => (float) $ad->spend,
+                    'meta_ids' => $this->metaAdIdsForMetrics($ad),
+                ];
+            }
+        }
+
+        return $stats;
     }
 
     protected function hydrateLiveMetricsFromMeta(iterable $ads, bool $cacheOnly = false, bool $enforceBudget = true): bool
@@ -286,9 +594,16 @@ class AdController extends Controller
                 $maps = $this->metaInsightsMaps($accountId);
             }
 
+            $lifetime = $maps['lifetime'] ?? [];
+            $accountAdsCache = [];
+
+            foreach ($ads as $ad) {
+                $this->ensurePreviousMetaAdIdsStored($ad, $lifetime, $accountAdsCache);
+            }
+
             $this->applyMetaInsightsToAds(
                 $ads,
-                $maps['lifetime'] ?? [],
+                $lifetime,
                 $maps['today'] ?? [],
                 $enforceBudget,
             );
@@ -332,6 +647,7 @@ class AdController extends Controller
             'adset_id',
             'creative_id',
             'meta_ad_id',
+            Schema::hasColumn('ads', 'previous_meta_ad_ids') ? 'previous_meta_ad_ids' : null,
             'status',
             'impressions',
             'clicks',
@@ -795,7 +1111,7 @@ $ad = Ad::create([
                 $accountId = $this->resolveMetaAccountIdForAd($ad);
                 if ($accountId) {
                     $map = $this->meta->getAdPlacementInsightsMap($accountId, 'maximum');
-                    $placementDelivery = $map[(string) $ad->meta_ad_id] ?? [];
+                    $placementDelivery = $this->mergedPlacementDeliveryForAd($ad, $map);
                 }
             } catch (Throwable $e) {
                 Log::warning('PREVIEW_PLACEMENT_FETCH_FAILED', ['error' => $e->getMessage()]);
@@ -1167,6 +1483,27 @@ public function enableInstagramAll(): RedirectResponse
     }
 }
 
+public function resyncMetricsAll(): RedirectResponse
+{
+    try {
+        $ads = Ad::query()->whereNotNull('meta_ad_id')->get();
+        $stats = $this->resyncMetricsFromMeta($ads, true);
+
+        return back()->with(
+            'success',
+            'Restored metrics for '.$stats['updated'].' ad(s) from Meta'
+                .($stats['discovered'] > 0 ? ' ('.$stats['discovered'].' linked to previous Meta ad ids).' : '.')
+                .' Includes spend on paused ads before IG reprovision.'
+        );
+    } catch (Throwable $e) {
+        Log::error('ADS_RESYNC_ALL_FAILED', ['error' => $e->getMessage()]);
+
+        return back()->withErrors([
+            'sync' => $e->getMessage(),
+        ]);
+    }
+}
+
 public function sync(Ad $ad): RedirectResponse
 {
     if (!$ad->meta_ad_id) {
@@ -1176,31 +1513,23 @@ public function sync(Ad $ad): RedirectResponse
     }
 
     try {
+        $stats = $this->resyncMetricsFromMeta(collect([$ad]), true);
 
-        $lifetime = $this->fetchMetaLifetimeMetrics($ad);
-        $todayMap = [];
-        $accountId = $this->resolveMetaAccountIdForAd($ad);
-        if ($accountId) {
-            $todayMap = $this->meta->getAdInsightsMap($accountId, 'today');
+        if (($stats['updated'] ?? 0) === 0) {
+            return back()->withErrors([
+                'sync' => 'No Meta insights found for this ad (current or previous Meta ad ids).',
+            ]);
         }
 
-        $this->persistAdMetricsFromMeta(
-            $ad,
-            $lifetime ? [
-                'impressions' => $lifetime['impressions'],
-                'clicks' => $lifetime['clicks'],
-                'spend' => $lifetime['spend'],
-            ] : null,
-            $todayMap[(string) $ad->meta_ad_id] ?? null
+        $ids = implode(', ', $stats['rows'][0]['meta_ids'] ?? []);
+
+        return back()->with(
+            'success',
+            'Metrics restored from Meta using ad id(s): '.$ids.'. Totals include paused ads from before IG reprovision.'
         );
-
-        $ad->refresh();
-
-        return back()->with('success', 'Ad metrics refreshed from Meta (stored totals are never reduced to zero).');
-
     }
 
-    catch(Throwable $e){
+    catch (Throwable $e) {
 
         Log::error('AD_SYNC_FAILED',[
             'error'=>$e->getMessage()
