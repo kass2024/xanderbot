@@ -606,7 +606,7 @@ class InstagramDeliveryService
             $statusLabel = 'IG enabled on Meta — waiting for impressions';
             if ($igImpressionsRecent === 0 && $igImpressionsLifetime === 0) {
                 if ($anImpressions > 0 && $fbImpressions > 0) {
-                    $deliveryWarning = 'Lifetime spend is mostly Audience Network + Facebook; Instagram has 0 impressions. Ad sets were refreshed to FB+IG only — new delivery can take 24–48h. Check Meta Ads Manager → Placement breakdown (last 7 days).';
+                    $deliveryWarning = 'Lifetime: Audience Network + Facebook, Instagram 0. Ad sets are now FB+IG only. If last 7 days shows no rows, the ad had no recent delivery — IG will only appear on new spend (24–48h after change, or raise budget / unpause).';
                 } elseif ($anImpressions > 0) {
                     $deliveryWarning = 'Impressions are on Audience Network only. Run: php artisan meta:enable-instagram --force-adsets';
                 }

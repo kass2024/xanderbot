@@ -129,14 +129,25 @@ class DebugAdInstagram extends Command
                     $this->warn('  '.$audit['delivery_warning']);
                 }
 
-                $this->line('  publisher_platform breakdown (last_7d — current delivery):');
-                $recent = $meta->getInsights((string) $ad->meta_ad_id, 'last_7d', ['breakdowns' => 'publisher_platform']);
-                if ($recent === []) {
-                    $this->line('    (no rows — ad may be new or paused)');
-                }
-                foreach ($recent as $row) {
-                    $this->line('    - '.($row['publisher_platform'] ?? '?').': '
-                        .($row['impressions'] ?? 0).' impr, $'.($row['spend'] ?? 0));
+                foreach (['last_7d' => 'last 7 days', 'today' => 'today'] as $preset => $label) {
+                    $this->line("  Totals ({$label}, all platforms):");
+                    $totals = $meta->getInsights((string) $ad->meta_ad_id, $preset);
+                    if ($totals === []) {
+                        $this->line('    (no spend/impressions in this period)');
+                    } else {
+                        $this->line('    impressions: '.($totals['impressions'] ?? 0)
+                            .', spend: $'.($totals['spend'] ?? 0));
+                    }
+
+                    $this->line("  publisher_platform breakdown ({$label}):");
+                    $recent = $meta->getInsights((string) $ad->meta_ad_id, $preset, ['breakdowns' => 'publisher_platform']);
+                    if ($recent === []) {
+                        $this->line('    (no platform rows — no delivery in this period)');
+                    }
+                    foreach ($recent as $row) {
+                        $this->line('    - '.($row['publisher_platform'] ?? '?').': '
+                            .($row['impressions'] ?? 0).' impr, $'.($row['spend'] ?? 0));
+                    }
                 }
             } catch (Throwable $e) {
                 $this->error('  Insights: '.$e->getMessage());
