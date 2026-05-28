@@ -637,6 +637,42 @@ protected function handleError($response, $endpoint, $payload = [])
     }
 
     /**
+     * Ensure the ad set promotes the brand Facebook Page (required for Page + IG ad delivery).
+     */
+    public function ensureAdSetPromotedPage(string $adsetMetaId, string $pageId): bool
+    {
+        $pageId = trim($pageId);
+
+        if ($pageId === '') {
+            return false;
+        }
+
+        $meta = $this->getAdSet($adsetMetaId);
+        $promoted = $meta['promoted_object'] ?? [];
+
+        if (is_string($promoted)) {
+            $decoded = json_decode($promoted, true);
+            $promoted = is_array($decoded) ? $decoded : [];
+        }
+
+        if (! is_array($promoted)) {
+            $promoted = [];
+        }
+
+        if ((string) ($promoted['page_id'] ?? '') === $pageId) {
+            return false;
+        }
+
+        $promoted['page_id'] = $pageId;
+
+        $this->updateAdSet($adsetMetaId, [
+            'promoted_object' => json_encode($promoted, JSON_THROW_ON_ERROR),
+        ]);
+
+        return true;
+    }
+
+    /**
      * Compare targeting payloads (ignore key order).
      *
      * @param  array<string, mixed>  $a

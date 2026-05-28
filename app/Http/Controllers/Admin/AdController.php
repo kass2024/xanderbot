@@ -1582,6 +1582,29 @@ public function enableInstagramAll(): RedirectResponse
     }
 }
 
+public function ensureBrandPagesAll(): RedirectResponse
+{
+    try {
+        $stats = $this->instagramDelivery->ensureBrandPageDeliveryAll(false);
+        $this->instagramDelivery->clearInsightsCaches($this->resolveMetaAccountId());
+
+        if (($stats['ads']['updated'] ?? 0) === 0 && ($stats['creatives']['updated'] ?? 0) === 0
+            && ($stats['adsets']['updated'] ?? 0) === 0 && ($stats['errors'] ?? []) !== []) {
+            return back()->withErrors([
+                'pages' => implode(' | ', array_slice($stats['errors'], 0, 3)),
+            ]);
+        }
+
+        return back()->with('success', $this->instagramDelivery->brandPageDeliverySummary($stats));
+    } catch (Throwable $e) {
+        Log::error('ADS_ENSURE_BRAND_PAGES_FAILED', ['error' => $e->getMessage()]);
+
+        return back()->withErrors([
+            'pages' => $e->getMessage(),
+        ]);
+    }
+}
+
 public function resyncMetricsAll(): RedirectResponse
 {
     try {
@@ -1695,6 +1718,11 @@ public function publish(Ad $ad): RedirectResponse
 
         if (!$ad->creative || !$ad->creative->meta_id) {
             throw new Exception('Creative not synced with Meta.');
+        }
+
+        if ($this->instagramDelivery->adNeedsBrandPageRepair($ad)) {
+            $this->instagramDelivery->repairAd($ad, true, false);
+            $ad->refresh();
         }
 
         /*

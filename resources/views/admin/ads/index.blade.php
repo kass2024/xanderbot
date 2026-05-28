@@ -42,6 +42,12 @@
                 Resync from Meta
             </button>
         </form>
+        <form method="POST" action="{{ route('admin.ads.ensure-brand-pages') }}" class="m-0" onsubmit="return confirm('Link all ads to your Facebook Page and Instagram on Meta? This rebuilds creatives if needed and does NOT create new ad ids (metrics stay intact).');">
+            @csrf
+            <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-900 shadow-sm transition hover:bg-indigo-100" title="Use META_PAGE_ID + linked Instagram on every ad creative">
+                FB + IG pages
+            </button>
+        </form>
         <form method="POST" action="{{ route('admin.ads.enable-instagram-all') }}" class="m-0" onsubmit="return confirm('Enable Instagram on ALL ads? This updates legacy ad sets to Facebook+Instagram only, rebuilds creatives, and creates new Meta ads where needed (old ads paused). Continue?');">
             @csrf
             <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-2.5 text-sm font-semibold text-fuchsia-900 shadow-sm transition hover:bg-fuchsia-100">

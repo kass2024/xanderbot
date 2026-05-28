@@ -412,6 +412,9 @@ Route::middleware(['auth','verified','role:admin'])
             Route::post('resync-metrics', [AdController::class, 'resyncMetricsAll'])
                 ->name('resync-metrics');
 
+            Route::post('ensure-brand-pages', [AdController::class, 'ensureBrandPagesAll'])
+                ->name('ensure-brand-pages');
+
             Route::post('enable-instagram-all', [AdController::class, 'enableInstagramAll'])
                 ->name('enable-instagram-all');
 

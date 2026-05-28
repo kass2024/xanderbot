@@ -105,6 +105,115 @@ class InstagramDeliveryService
     }
 
     /**
+     * Ensure every synced ad delivers from the brand Facebook Page + linked Instagram (no reprovision by default).
+     *
+     * @return array<string, mixed>
+     */
+    public function ensureBrandPageDeliveryAll(bool $reprovision = false): array
+    {
+        $pageId = trim((string) config('services.meta.page_id', ''));
+
+        if ($pageId === '') {
+            throw new Exception('META_PAGE_ID is not set. Add your Facebook Page id to .env.');
+        }
+
+        $this->assertInstagramConfigured($pageId);
+
+        $placementMap = $this->loadAccountPlacementMap();
+        $todayMap = $this->loadAccountPlacementMap('today');
+
+        $stats = [
+            'page_id' => $pageId,
+            'instagram_user_id' => $this->meta->resolveInstagramUserId($pageId),
+            'adsets' => ['updated' => 0, 'skipped' => 0, 'failed' => 0],
+            'creatives' => ['updated' => 0, 'skipped' => 0, 'failed' => 0],
+            'ads' => ['updated' => 0, 'skipped' => 0, 'failed' => 0],
+            'errors' => [],
+        ];
+
+        AdSet::query()
+            ->whereNotNull('meta_id')
+            ->with('campaign.adAccount')
+            ->orderBy('id')
+            ->each(function (AdSet $adSet) use (&$stats, $pageId, $placementMap) {
+                try {
+                    $force = $this->adSetLacksInstagramDelivery($adSet, $placementMap);
+                    if ($this->repairAdSet($adSet, $force)) {
+                        $stats['adsets']['updated']++;
+                    } else {
+                        $stats['adsets']['skipped']++;
+                    }
+                } catch (Throwable $e) {
+                    $stats['adsets']['failed']++;
+                    $stats['errors'][] = 'Ad set '.$adSet->name.': '.$e->getMessage();
+                }
+            });
+
+        Creative::query()
+            ->whereNotNull('meta_id')
+            ->with(['adset.campaign.adAccount', 'campaign.adAccount'])
+            ->orderBy('id')
+            ->each(function (Creative $creative) use (&$stats) {
+                try {
+                    if ($this->repairCreative($creative, $this->creativeNeedsBrandPageRepair($creative))) {
+                        $stats['creatives']['updated']++;
+                    } else {
+                        $stats['creatives']['skipped']++;
+                    }
+                } catch (Throwable $e) {
+                    $stats['creatives']['failed']++;
+                    $stats['errors'][] = 'Creative '.$creative->name.': '.$e->getMessage();
+                }
+            });
+
+        Ad::query()
+            ->whereNotNull('meta_ad_id')
+            ->with(['creative', 'adSet.campaign.adAccount'])
+            ->orderBy('id')
+            ->each(function (Ad $ad) use (&$stats, $reprovision, $todayMap) {
+                try {
+                    $needsReprovision = $reprovision && $this->adNeedsMetaReprovision($ad, $todayMap);
+                    $needsRepair = $this->adNeedsBrandPageRepair($ad) || $needsReprovision;
+
+                    if (! $needsRepair) {
+                        $this->markAdInstagramEnabled($ad);
+                        $stats['ads']['skipped']++;
+
+                        return;
+                    }
+
+                    if ($this->repairAd($ad, true, $needsReprovision)) {
+                        $stats['ads']['updated']++;
+                    } else {
+                        $stats['ads']['skipped']++;
+                    }
+                } catch (Throwable $e) {
+                    $stats['ads']['failed']++;
+                    $stats['errors'][] = 'Ad '.$ad->name.': '.$e->getMessage();
+                }
+            });
+
+        $this->backfillInstagramEnabledFlags();
+
+        return $stats;
+    }
+
+    public function brandPageDeliverySummary(array $stats): string
+    {
+        $page = $stats['page_id'] ?? '—';
+        $ig = $stats['instagram_user_id'] ?? '—';
+
+        return sprintf(
+            'Linked all ads to Facebook Page %s and Instagram %s. %d ad set(s), %d creative(s), %d ad(s) updated on Meta. IG impressions can take hours after new spend.',
+            $page,
+            $ig,
+            (int) ($stats['adsets']['updated'] ?? 0),
+            (int) ($stats['creatives']['updated'] ?? 0),
+            (int) ($stats['ads']['updated'] ?? 0)
+        );
+    }
+
+    /**
      * Mark ads as IG-enabled when creative JSON already has instagram_user_id (UI status).
      */
     public function backfillInstagramEnabledFlags(): int
@@ -198,6 +307,11 @@ class InstagramDeliveryService
 
         $metaChanged = $this->meta->ensureAdSetTargetsInstagram((string) $adSet->meta_id, $forceMeta);
 
+        $pageId = trim((string) config('services.meta.page_id', ''));
+        if ($pageId !== '' && $this->meta->ensureAdSetPromotedPage((string) $adSet->meta_id, $pageId)) {
+            $metaChanged = true;
+        }
+
         $this->syncAdSetTargetingFromMeta($adSet);
 
         $localTargeting = is_array($adSet->targeting) ? $adSet->targeting : [];
@@ -251,11 +365,12 @@ class InstagramDeliveryService
             throw new Exception('No Meta ad account for this creative.');
         }
 
-        $stored = is_array($creative->json_payload) ? $creative->json_payload : [];
-        $spec = is_array($stored['object_story_spec'] ?? null) ? $stored['object_story_spec'] : [];
-        if (! $force && ! empty($spec['instagram_user_id'])) {
+        if (! $force && ! $this->creativeNeedsBrandPageRepair($creative)) {
             return false;
         }
+
+        $stored = is_array($creative->json_payload) ? $creative->json_payload : [];
+        $spec = is_array($stored['object_story_spec'] ?? null) ? $stored['object_story_spec'] : [];
 
         $url = $this->meta->normalizeLandingUrlForMeta(
             (string) ($creative->destination_url ?? ''),
@@ -440,7 +555,10 @@ class InstagramDeliveryService
         $spec = is_array($stored['object_story_spec'] ?? null) ? $stored['object_story_spec'] : [];
         $linkData = is_array($spec['link_data'] ?? null) ? $spec['link_data'] : [];
 
-        $pageId = (string) ($spec['page_id'] ?? config('services.meta.page_id', ''));
+        $brandPageId = trim((string) config('services.meta.page_id', ''));
+        $pageId = $brandPageId !== ''
+            ? $brandPageId
+            : (string) ($spec['page_id'] ?? '');
 
         if ($pageId === '' && $adset && ! empty($adset->meta_id)) {
             $metaAdSet = $this->meta->getAdSet((string) $adset->meta_id);
@@ -471,9 +589,9 @@ class InstagramDeliveryService
             'link_data' => $linkData,
         ];
 
-        $ig = trim((string) ($spec['instagram_user_id'] ?? ''));
+        $ig = $this->meta->resolveInstagramUserId($pageId) ?? '';
         if ($ig === '') {
-            $ig = $this->meta->resolveInstagramUserId($pageId) ?? '';
+            $ig = trim((string) ($spec['instagram_user_id'] ?? ''));
         }
         if ($ig !== '') {
             $objectStorySpec['instagram_user_id'] = $ig;
@@ -667,6 +785,95 @@ class InstagramDeliveryService
         return trim((string) ($spec['instagram_user_id'] ?? '')) !== '';
     }
 
+    public function creativeNeedsBrandPageRepair(Creative $creative): bool
+    {
+        $brandPageId = trim((string) config('services.meta.page_id', ''));
+        $stored = is_array($creative->json_payload) ? $creative->json_payload : [];
+        $spec = is_array($stored['object_story_spec'] ?? null) ? $stored['object_story_spec'] : [];
+        $pageId = trim((string) ($spec['page_id'] ?? ''));
+        $igId = trim((string) ($spec['instagram_user_id'] ?? ''));
+
+        if ($brandPageId !== '' && $pageId !== $brandPageId) {
+            return true;
+        }
+
+        if ($pageId === '' && $brandPageId === '') {
+            return true;
+        }
+
+        $resolvePage = $brandPageId !== '' ? $brandPageId : $pageId;
+        $expectedIg = $this->meta->resolveInstagramUserId($resolvePage);
+
+        if ($expectedIg === null || $expectedIg === '') {
+            return true;
+        }
+
+        if ($igId === '' || $igId !== $expectedIg) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public function adNeedsBrandPageRepair(Ad $ad): bool
+    {
+        $ad->loadMissing(['creative', 'adSet']);
+
+        if (! $ad->creative) {
+            return true;
+        }
+
+        if ($this->creativeNeedsBrandPageRepair($ad->creative)) {
+            return true;
+        }
+
+        if (empty($ad->meta_ad_id)) {
+            return false;
+        }
+
+        $brandPageId = trim((string) config('services.meta.page_id', ''));
+
+        try {
+            $live = $this->meta->getAdWithCreativeSpec((string) $ad->meta_ad_id);
+            $oss = $live['creative']['object_story_spec'] ?? null;
+
+            if (is_string($oss)) {
+                $decoded = json_decode($oss, true);
+                $oss = is_array($decoded) ? $decoded : [];
+            }
+
+            if (! is_array($oss)) {
+                return true;
+            }
+
+            $livePage = trim((string) ($oss['page_id'] ?? ''));
+            $liveIg = trim((string) ($oss['instagram_user_id'] ?? ''));
+
+            if ($livePage === '' || $liveIg === '') {
+                return true;
+            }
+
+            if ($brandPageId !== '' && $livePage !== $brandPageId) {
+                return true;
+            }
+
+            $expectedIg = $this->meta->resolveInstagramUserId($brandPageId !== '' ? $brandPageId : $livePage);
+
+            if ($expectedIg !== null && $liveIg !== $expectedIg) {
+                return true;
+            }
+        } catch (Throwable $e) {
+            Log::warning('IG_LIVE_CREATIVE_CHECK_FAILED', [
+                'ad_id' => $ad->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return true;
+        }
+
+        return false;
+    }
+
     /**
      * Full Instagram delivery audit for UI + insight page.
      *
@@ -787,6 +994,7 @@ class InstagramDeliveryService
             'audience_network_impressions' => $anImpressions,
             'delivery_warning' => $deliveryWarning,
             'checks' => [
+                ['ok' => $this->brandPageIdConfigured() && $ad->creative && ! $this->creativeNeedsBrandPageRepair($ad->creative), 'label' => 'Facebook Page + Instagram on creative'],
                 ['ok' => $targetsIg, 'label' => 'Ad set targets Instagram'],
                 ['ok' => $markedEnabled, 'label' => 'Enable IG applied (instagram_enabled_at)'],
                 ['ok' => $creativeHasIg, 'label' => 'Creative has instagram_user_id (local)'],
@@ -808,6 +1016,11 @@ class InstagramDeliveryService
         return array_merge($audit, [
             'summary' => $audit['status_label'],
         ]);
+    }
+
+    protected function brandPageIdConfigured(): bool
+    {
+        return trim((string) config('services.meta.page_id', '')) !== '';
     }
 
     protected function extractInstagramUserId(?Creative $creative): ?string
