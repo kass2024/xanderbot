@@ -28,11 +28,12 @@ class InstagramDeliveryService
      *     errors: list<string>
      * }
      */
-    public function repairAll(bool $forceAdSets = true): array
+    public function repairAll(bool $forceAdSets = true, bool $reprovisionAds = false): array
     {
         $this->assertInstagramConfigured();
 
         $placementMap = $this->loadAccountPlacementMap();
+        $todayMap = $this->loadAccountPlacementMap('today');
 
         $stats = [
             'campaigns' => Campaign::query()->whereNotNull('meta_id')->count(),
@@ -83,9 +84,10 @@ class InstagramDeliveryService
             ->whereNotNull('meta_ad_id')
             ->with(['creative', 'adSet.campaign.adAccount'])
             ->orderBy('id')
-            ->each(function (Ad $ad) use (&$stats) {
+            ->each(function (Ad $ad) use (&$stats, $reprovisionAds, $todayMap) {
                 try {
-                    if ($this->repairAd($ad, false)) {
+                    $reprovision = $reprovisionAds && $this->adNeedsMetaReprovision($ad, $todayMap);
+                    if ($this->repairAd($ad, true, $reprovision)) {
                         $stats['ads']['updated']++;
                     } else {
                         $stats['ads']['skipped']++;
@@ -196,6 +198,8 @@ class InstagramDeliveryService
 
         $metaChanged = $this->meta->ensureAdSetTargetsInstagram((string) $adSet->meta_id, $forceMeta);
 
+        $this->syncAdSetTargetingFromMeta($adSet);
+
         $localTargeting = is_array($adSet->targeting) ? $adSet->targeting : [];
         $patched = $this->meta->targetingWithFacebookAndInstagram($localTargeting);
         $localChanged = json_encode($patched) !== json_encode($localTargeting);
@@ -205,6 +209,30 @@ class InstagramDeliveryService
         }
 
         return $metaChanged || $localChanged;
+    }
+
+    public function syncAdSetTargetingFromMeta(AdSet $adSet): void
+    {
+        if (empty($adSet->meta_id)) {
+            return;
+        }
+
+        try {
+            $meta = $this->meta->getAdSet((string) $adSet->meta_id);
+            $targeting = $meta['targeting'] ?? [];
+            if (is_string($targeting)) {
+                $decoded = json_decode($targeting, true);
+                $targeting = is_array($decoded) ? $decoded : [];
+            }
+            if (is_array($targeting) && $targeting !== []) {
+                $adSet->update(['targeting' => $targeting]);
+            }
+        } catch (Throwable $e) {
+            Log::warning('IG_SYNC_ADSET_TARGETING_FAILED', [
+                'adset_id' => $adSet->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -266,7 +294,7 @@ class InstagramDeliveryService
      *
      * @param  bool  $recreateCreative  When false (bulk run after creatives pass), only attaches the current creative meta_id.
      */
-    public function repairAd(Ad $ad, bool $recreateCreative = true): bool
+    public function repairAd(Ad $ad, bool $recreateCreative = true, bool $reprovision = false): bool
     {
         $ad->loadMissing(['creative', 'adSet.campaign.adAccount']);
 
@@ -300,10 +328,16 @@ class InstagramDeliveryService
             throw new Exception('Creative has no Meta ID after repair.');
         }
 
-        $response = $this->meta->attachCreativeToAd((string) $ad->meta_ad_id, $creativeMetaId);
+        if ($reprovision) {
+            $this->reprovisionAdOnMeta($ad, $creativeMetaId);
+        } else {
+            $response = $this->meta->attachCreativeToAd((string) $ad->meta_ad_id, $creativeMetaId);
 
-        if (isset($response['error'])) {
-            throw new Exception($response['error']['message'] ?? 'Meta failed to attach Instagram creative.');
+            if (isset($response['error'])) {
+                throw new Exception($response['error']['message'] ?? 'Meta failed to attach Instagram creative.');
+            }
+
+            $this->refreshAdDeliveryOnMeta($ad);
         }
 
         $this->markAdInstagramEnabled($ad);
@@ -312,9 +346,79 @@ class InstagramDeliveryService
             'ad_id' => $ad->id,
             'meta_ad_id' => $ad->meta_ad_id,
             'creative_meta_id' => $creativeMetaId,
+            'reprovisioned' => $reprovision,
         ]);
 
         return true;
+    }
+
+    /**
+     * New Meta ad in the same ad set (legacy campaigns) so delivery respects FB+IG placements.
+     */
+    public function reprovisionAdOnMeta(Ad $ad, string $creativeMetaId): void
+    {
+        $accountId = $this->resolveAccountIdForAd($ad);
+        if (! $accountId) {
+            throw new Exception('No Meta ad account for this ad.');
+        }
+
+        $oldMetaAdId = (string) $ad->meta_ad_id;
+        $status = $ad->status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+
+        $response = $this->meta->createAd($accountId, [
+            'name' => $ad->name.' · IG '.now()->format('Y-m-d H:i'),
+            'adset_id' => (string) $ad->adSet->meta_id,
+            'creative' => ['id' => $creativeMetaId],
+            'status' => $status,
+        ]);
+
+        $newMetaAdId = (string) ($response['id'] ?? '');
+        if ($newMetaAdId === '') {
+            throw new Exception('Meta did not return a new ad id during reprovision.');
+        }
+
+        $ad->update(['meta_ad_id' => $newMetaAdId]);
+
+        try {
+            $this->meta->updateAd($oldMetaAdId, ['status' => 'PAUSED']);
+        } catch (Throwable $e) {
+            Log::warning('IG_PAUSE_OLD_AD_FAILED', [
+                'old_meta_ad_id' => $oldMetaAdId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        Log::info('IG_REPROVISION_AD_OK', [
+            'ad_id' => $ad->id,
+            'old_meta_ad_id' => $oldMetaAdId,
+            'new_meta_ad_id' => $newMetaAdId,
+        ]);
+    }
+
+    /**
+     * Pause → active nudges Meta to pick up new ad set placements + creative.
+     */
+    public function refreshAdDeliveryOnMeta(Ad $ad): void
+    {
+        if (empty($ad->meta_ad_id)) {
+            return;
+        }
+
+        $metaId = (string) $ad->meta_ad_id;
+        $targetStatus = $ad->status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+
+        try {
+            if ($targetStatus === 'ACTIVE') {
+                $this->meta->updateAd($metaId, ['status' => 'PAUSED']);
+                usleep(500_000);
+            }
+            $this->meta->updateAd($metaId, ['status' => $targetStatus]);
+        } catch (Throwable $e) {
+            Log::warning('IG_REFRESH_AD_DELIVERY_FAILED', [
+                'meta_ad_id' => $metaId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -459,7 +563,7 @@ class InstagramDeliveryService
     /**
      * @return array<string, array<string, array{impressions: int, clicks: int, spend: float}>>
      */
-    protected function loadAccountPlacementMap(): array
+    protected function loadAccountPlacementMap(string $preset = 'maximum'): array
     {
         $raw = AdAccount::query()->whereNotNull('meta_id')->value('meta_id')
             ?? config('services.meta.ad_account_id');
@@ -469,12 +573,34 @@ class InstagramDeliveryService
         }
 
         try {
-            return $this->meta->getAdPlacementInsightsMap((string) $raw, 'maximum');
+            return $this->meta->getAdPlacementInsightsMap((string) $raw, $preset);
         } catch (Throwable $e) {
-            Log::warning('IG_REPAIR_PLACEMENT_MAP_FAILED', ['error' => $e->getMessage()]);
+            Log::warning('IG_REPAIR_PLACEMENT_MAP_FAILED', [
+                'preset' => $preset,
+                'error' => $e->getMessage(),
+            ]);
 
             return [];
         }
+    }
+
+    /**
+     * Legacy ads still delivering on Audience Network need a new Meta ad id.
+     *
+     * @param  array<string, array<string, array{impressions: int, clicks: int, spend: float}>>  $todayMap
+     */
+    public function adNeedsMetaReprovision(Ad $ad, array $todayMap): bool
+    {
+        if (empty($ad->meta_ad_id)) {
+            return false;
+        }
+
+        $delivery = $todayMap[(string) $ad->meta_ad_id] ?? [];
+        $ig = (int) ($delivery['instagram']['impressions'] ?? 0);
+        $an = (int) ($delivery['audience_network']['impressions'] ?? 0);
+        $fb = (int) ($delivery['facebook']['impressions'] ?? 0);
+
+        return $ig === 0 && ($an > 0 || $fb > 0);
     }
 
     /**
@@ -614,10 +740,9 @@ class InstagramDeliveryService
             $statusLabel = 'IG enabled on Meta — waiting for impressions';
             if ($igImpressionsRecent === 0 && $igImpressionsLifetime === 0) {
                 if ($anImpressions > 0 && $fbImpressions > 0) {
-                    $deliveryWarning = 'Ad is new but Meta reports Audience Network + Facebook, Instagram 0. '
-                        .'Usually the ad set was created with Audience Network in manual placements, or spend started before enable-instagram. '
-                        .'Create a new ad set (Automatic placements) or run meta:enable-instagram --force-adsets. '
-                        .'Note: Meta last_7d excludes today — use the today breakdown for ads created today.';
+                    $deliveryWarning = 'Instagram 0 but Facebook/Audience Network have impressions. '
+                        .'Run once: php artisan meta:enable-instagram --reprovision (creates new Meta ads on legacy ad sets, pauses old ads). '
+                        .'Past impressions stay on the old ad id; only new spend can show instagram.';
                 } elseif ($anImpressions > 0) {
                     $deliveryWarning = 'Impressions are on Audience Network only. Run: php artisan meta:enable-instagram --force-adsets';
                 }

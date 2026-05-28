@@ -878,10 +878,7 @@ protected function buildTargeting(array $targeting): array
         }
 
         if (in_array('instagram', $platforms, true)) {
-            $targeting['instagram_positions'] = array_values(array_unique(array_merge(
-                is_array($targeting['instagram_positions'] ?? null) ? $targeting['instagram_positions'] : [],
-                ['stream', 'story', 'reels', 'explore', 'profile_feed']
-            )));
+            $targeting['instagram_positions'] = ['stream', 'story', 'reels', 'explore', 'profile_feed'];
         }
 
         if (in_array('messenger', $platforms, true)) {
@@ -1542,6 +1539,21 @@ public function getAdWithCreativeSpec(string $adId): array
 | GET INSIGHTS
 |--------------------------------------------------------------------------
 */
+/**
+ * Lightweight platform breakdown (avoids heavy insight fields + timeouts).
+ *
+ * @return list<array<string, mixed>>
+ */
+public function getAdPlatformBreakdown(string $adId, string $preset = 'today'): array
+{
+    return $this->collectPagedData("{$adId}/insights", [
+        'fields' => 'impressions,clicks,spend',
+        'date_preset' => $preset,
+        'breakdowns' => 'publisher_platform',
+        'limit' => 25,
+    ]);
+}
+
 public function getInsights(string $objectId, string $preset = 'maximum', array $extra = []): array
 {
     /*

@@ -36,7 +36,7 @@
         >
             Ad sets
         </a>
-        <form method="POST" action="{{ route('admin.ads.enable-instagram-all') }}" class="m-0" onsubmit="return confirm('Update ALL existing campaigns, ad sets, creatives, and ads on Meta for Instagram delivery?');">
+        <form method="POST" action="{{ route('admin.ads.enable-instagram-all') }}" class="m-0" onsubmit="return confirm('Enable Instagram on ALL ads? This updates legacy ad sets to Facebook+Instagram only, rebuilds creatives, and creates new Meta ads where needed (old ads paused). Continue?');">
             @csrf
             <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-2.5 text-sm font-semibold text-fuchsia-900 shadow-sm transition hover:bg-fuchsia-100">
                 Enable IG (all existing)

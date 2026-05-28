@@ -142,7 +142,7 @@ class DebugAdInstagram extends Command
 
             try {
                 $this->line('  publisher_platform breakdown (maximum / lifetime):');
-                $rows = $meta->getInsights((string) $ad->meta_ad_id, 'maximum', ['breakdowns' => 'publisher_platform']);
+                $rows = $meta->getAdPlatformBreakdown((string) $ad->meta_ad_id, 'maximum');
                 if ($rows === []) {
                     $this->line('    (no breakdown rows)');
                 }
@@ -155,28 +155,26 @@ class DebugAdInstagram extends Command
                 }
 
                 foreach (['last_7d' => 'last 7 days', 'today' => 'today'] as $preset => $label) {
-                    $this->line("  Totals ({$label}, all platforms):");
-                    $totals = $meta->getInsights((string) $ad->meta_ad_id, $preset);
-                    if ($totals === []) {
-                        $this->line('    (no spend/impressions in this period)');
-                    } else {
-                        $this->line('    impressions: '.($totals['impressions'] ?? 0)
-                            .', spend: $'.($totals['spend'] ?? 0));
-                    }
-
                     $this->line("  publisher_platform breakdown ({$label}):");
-                    $recent = $meta->getInsights((string) $ad->meta_ad_id, $preset, ['breakdowns' => 'publisher_platform']);
+                    $recent = $meta->getAdPlatformBreakdown((string) $ad->meta_ad_id, $preset);
+                    $totalImpr = 0;
+                    $totalSpend = 0.0;
                     if ($recent === []) {
                         $this->line('    (no platform rows — no delivery in this period)');
                     }
                     foreach ($recent as $row) {
+                        $impr = (int) ($row['impressions'] ?? 0);
+                        $spend = (float) ($row['spend'] ?? 0);
+                        $totalImpr += $impr;
+                        $totalSpend += $spend;
                         $this->line('    - '.($row['publisher_platform'] ?? '?').': '
-                            .($row['impressions'] ?? 0).' impr, $'.($row['spend'] ?? 0));
+                            .$impr.' impr, $'.$spend);
                     }
+                    $this->line("    total: {$totalImpr} impr, \${$totalSpend}");
                 }
 
                 $hasIgToday = false;
-                $todayRows = $meta->getInsights((string) $ad->meta_ad_id, 'today', ['breakdowns' => 'publisher_platform']);
+                $todayRows = $meta->getAdPlatformBreakdown((string) $ad->meta_ad_id, 'today');
                 foreach ($todayRows as $row) {
                     if (($row['publisher_platform'] ?? '') === 'instagram' && (int) ($row['impressions'] ?? 0) > 0) {
                         $hasIgToday = true;
@@ -184,9 +182,9 @@ class DebugAdInstagram extends Command
                 }
                 if (! $hasIgToday && ($audit['instagram_impressions'] ?? 0) === 0) {
                     $this->newLine();
-                    $this->comment('  → Config is correct (IG enabled). For ads created today, Meta last_7d often excludes today (shows $0).');
-                    $this->comment('  → If today shows audience_network: ad set likely included AN at create — new ad sets now force FB+IG only.');
-                    $this->comment('  → Duplicate ad set (Automatic) + new ad, or confirm live publisher_platforms above is facebook, instagram only.');
+                    $this->comment('  → Config OK. Legacy ad + AN/FB today: run php artisan meta:enable-instagram --reprovision once.');
+                    $this->comment('  → Or click Enable IG (all existing) in Ads Manager — creates new Meta ad ids for legacy campaigns.');
+                    $this->comment('  → Old impressions stay on the paused ad; watch NEW meta_ad_id for instagram in breakdown.');
                 }
             } catch (Throwable $e) {
                 $this->error('  Insights: '.$e->getMessage());

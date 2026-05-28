@@ -1142,14 +1142,21 @@ public function duplicate(Ad $ad): RedirectResponse
 public function enableInstagram(Ad $ad): RedirectResponse
 {
     try {
-        $this->instagramDelivery->repairAd($ad, true);
+        $accountId = $this->resolveMetaAccountIdForAd($ad);
+        $todayMap = $accountId
+            ? $this->meta->getAdPlacementInsightsMap($accountId, 'today')
+            : [];
+        $reprovision = $this->instagramDelivery->adNeedsMetaReprovision($ad, $todayMap);
+
+        $this->instagramDelivery->repairAd($ad, true, $reprovision);
         $ad->refresh();
         $this->instagramDelivery->clearInsightsCaches($this->resolveMetaAccountIdForAd($ad));
 
-        return back()->with(
-            'success',
-            'Instagram enabled on Meta for this ad. Platforms column should show “IG enabled” — IG live impressions can take a few hours.'
-        );
+        $message = $reprovision
+            ? 'New Meta ad created for Instagram on this legacy ad set (old Meta ad paused). Platforms should show IG enabled; IG live after new spend (24–48h).'
+            : 'Instagram enabled on Meta for this ad. Platforms column should show “IG enabled” — IG live impressions can take a few hours.';
+
+        return back()->with('success', $message);
     } catch (Throwable $e) {
         Log::error('AD_ENABLE_INSTAGRAM_FAILED', [
             'ad_id' => $ad->id,
@@ -1168,7 +1175,7 @@ public function enableInstagram(Ad $ad): RedirectResponse
 public function enableInstagramAll(): RedirectResponse
 {
     try {
-        $stats = $this->instagramDelivery->repairAll();
+        $stats = $this->instagramDelivery->repairAll(true, true);
         $this->instagramDelivery->clearInsightsCaches($this->resolveMetaAccountId());
 
         if ($stats['ads']['updated'] === 0 && $stats['errors'] !== []) {
@@ -1177,7 +1184,11 @@ public function enableInstagramAll(): RedirectResponse
             ]);
         }
 
-        return back()->with('success', $this->instagramDelivery->summaryMessage($stats));
+        return back()->with(
+            'success',
+            $this->instagramDelivery->summaryMessage($stats)
+                .' Legacy campaigns: new Meta ads were created where needed; old ads paused. IG impressions may take 24–48h on new spend.'
+        );
     } catch (Throwable $e) {
         Log::error('AD_ENABLE_INSTAGRAM_ALL_FAILED', ['error' => $e->getMessage()]);
 

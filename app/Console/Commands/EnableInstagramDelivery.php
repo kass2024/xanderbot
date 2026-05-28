@@ -10,7 +10,8 @@ class EnableInstagramDelivery extends Command
 {
     protected $signature = 'meta:enable-instagram
                             {--dry-run : List counts only, do not call Meta}
-                            {--force-adsets : Re-apply FB+IG placements on Meta even when targeting looks correct}';
+                            {--force-adsets : Re-apply FB+IG placements on all ad sets (default with run)}
+                            {--reprovision : Create new Meta ads for legacy delivery (pauses old ad ids)}';
 
     protected $description = 'Update all existing campaigns, ad sets, creatives, and ads on Meta for Instagram delivery';
 
@@ -47,7 +48,12 @@ class EnableInstagramDelivery extends Command
         $this->newLine();
 
         $forceAdSets = $this->option('force-adsets') || ! $this->option('dry-run');
-        $stats = $instagram->repairAll($forceAdSets);
+        $reprovision = (bool) $this->option('reprovision');
+        $stats = $instagram->repairAll($forceAdSets, $reprovision);
+
+        if ($reprovision) {
+            $this->comment('Reprovisioned ads where today had FB/AN but no IG (old Meta ad ids paused).');
+        }
         $backfilled = $instagram->backfillInstagramEnabledFlags();
 
         $this->info($instagram->summaryMessage($stats));
