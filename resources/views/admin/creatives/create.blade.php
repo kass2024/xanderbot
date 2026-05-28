@@ -233,10 +233,16 @@ Creative Image
 <input
 type="file"
 name="image"
-accept="image/*"
+accept="image/jpeg,image/png,image/webp"
 class="w-full border rounded-xl px-4 py-3"
 onchange="previewImage(event)"
 required>
+
+<p class="mt-1 text-xs text-slate-500">JPG or PNG, max 5MB. Large images are auto-resized for Meta after upload.</p>
+
+@error('image')
+<p class="mt-2 text-sm text-red-600">{{ $message }}</p>
+@enderror
 
 </div>
 

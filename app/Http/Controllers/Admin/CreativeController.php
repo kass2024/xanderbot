@@ -89,7 +89,27 @@ class CreativeController extends Controller
 
     public function store(Request $request)
     {
-        Log::info('CREATIVE_STORE_REQUEST', $request->all());
+        Log::info('CREATIVE_STORE_REQUEST', $request->except(['image', '_token']));
+
+        if (! $request->hasFile('image')) {
+            return back()
+                ->withInput()
+                ->withErrors(['image' => 'Please choose an image file (JPG or PNG).']);
+        }
+
+        $uploadedFile = $request->file('image');
+
+        if (! $uploadedFile->isValid()) {
+            return back()
+                ->withInput()
+                ->withErrors(['image' => $this->uploadedImageErrorMessage($uploadedFile)]);
+        }
+
+        Log::info('CREATIVE_STORE_IMAGE', [
+            'size_kb' => round($uploadedFile->getSize() / 1024, 1),
+            'mime' => $uploadedFile->getMimeType(),
+            'name' => $uploadedFile->getClientOriginalName(),
+        ]);
 
         $data = $request->validate([
 
@@ -105,15 +125,15 @@ class CreativeController extends Controller
 
             'body' => 'nullable|string',
 
-            'destination_url' => 'nullable|url',
+            'destination_url' => 'nullable|string|max:2048',
 
             'call_to_action' => 'nullable|string|max:50',
 
-            'image' => 'required|image|max:4096',
+            'image' => ['required', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
 
             'sync_meta' => 'nullable|boolean',
 
-            'status' => 'nullable|string'
+            'status' => 'nullable|string',
 
         ]);
 
@@ -351,12 +371,42 @@ class CreativeController extends Controller
 
             ]);
 
+            $message = $e->getMessage();
+            $field = $this->creativeStoreErrorField($message);
+
             return back()
                 ->withInput()
                 ->withErrors([
-                    'meta' => $e->getMessage()
+                    $field => $message,
                 ]);
         }
+    }
+
+    private function uploadedImageErrorMessage(\Illuminate\Http\UploadedFile $file): string
+    {
+        return match ($file->getError()) {
+            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE =>
+                'Image is too large for PHP on this server (upload_max_filesize / post_max_size). Use an image under 5MB or set upload_max_filesize=5M in php.ini.',
+            UPLOAD_ERR_PARTIAL => 'The image upload was interrupted. Please try again.',
+            UPLOAD_ERR_NO_FILE => 'No image file was received by the server.',
+            default => $file->getErrorMessage() ?: 'The image failed to upload before it reached the app.',
+        };
+    }
+
+    private function creativeStoreErrorField(string $message): string
+    {
+        $lower = strtolower($message);
+
+        if (
+            str_contains($lower, 'image')
+            || str_contains($lower, 'upload')
+            || str_contains($lower, 'hash')
+            || str_contains($lower, 'resize')
+        ) {
+            return 'image';
+        }
+
+        return 'meta';
     }
 
 
@@ -392,7 +442,7 @@ class CreativeController extends Controller
 
             'call_to_action' => 'nullable|string|max:50',
 
-            'image' => 'nullable|image|max:4096'
+            'image' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
 
         ]);
 

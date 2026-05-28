@@ -772,6 +772,87 @@ if (!is_array($targeting)) {
             throw new Exception('Image file not found or not readable. Check server storage permissions.');
         }
 
+        $preparedPath = $this->prepareImageForMetaUpload($filePath);
+        $cleanupPrepared = $preparedPath !== $filePath;
+
+        try {
+            return $this->uploadImageToMetaAccount($accountId, $preparedPath);
+        } finally {
+            if ($cleanupPrepared && is_file($preparedPath)) {
+                @unlink($preparedPath);
+            }
+        }
+    }
+
+    /**
+     * Resize/compress large creatives so Meta adimages accepts them.
+     */
+    public function prepareImageForMetaUpload(string $filePath): string
+    {
+        $info = @getimagesize($filePath);
+
+        if ($info === false || ! function_exists('imagecreatetruecolor')) {
+            return $filePath;
+        }
+
+        $width = (int) ($info[0] ?? 0);
+        $height = (int) ($info[1] ?? 0);
+        $type = (int) ($info[2] ?? 0);
+        $maxDim = 2048;
+        $maxBytes = 4 * 1024 * 1024;
+        $size = (int) filesize($filePath);
+
+        $scale = min(1.0, $maxDim / max($width, $height, 1));
+
+        if ($scale >= 1.0 && $size <= $maxBytes) {
+            return $filePath;
+        }
+
+        $src = match ($type) {
+            IMAGETYPE_JPEG => @imagecreatefromjpeg($filePath),
+            IMAGETYPE_PNG => @imagecreatefrompng($filePath),
+            IMAGETYPE_WEBP => function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($filePath) : false,
+            default => false,
+        };
+
+        if ($src === false) {
+            return $filePath;
+        }
+
+        $newW = max(1, (int) round($width * $scale));
+        $newH = max(1, (int) round($height * $scale));
+        $dst = imagecreatetruecolor($newW, $newH);
+        $white = imagecolorallocate($dst, 255, 255, 255);
+        imagefill($dst, 0, 0, $white);
+        imagecopyresampled($dst, $src, 0, 0, 0, 0, $newW, $newH, $width, $height);
+        imagedestroy($src);
+
+        $tempPath = sys_get_temp_dir().DIRECTORY_SEPARATOR.'meta_ad_'.uniqid('', true).'.jpg';
+
+        if (! imagejpeg($dst, $tempPath, 85)) {
+            imagedestroy($dst);
+
+            return $filePath;
+        }
+
+        imagedestroy($dst);
+
+        Log::info('META_IMAGE_PREPARED', [
+            'from' => $filePath,
+            'to' => $tempPath,
+            'original' => "{$width}x{$height}",
+            'prepared' => "{$newW}x{$newH}",
+            'bytes' => filesize($tempPath),
+        ]);
+
+        return $tempPath;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function uploadImageToMetaAccount(string $accountId, string $filePath): array
+    {
         $this->validateImageForMetaUpload($filePath);
 
         $accountId = $this->formatAccount($accountId);
@@ -785,7 +866,7 @@ if (!is_array($targeting)) {
             'bytes' => filesize($filePath),
         ]);
 
-        // Prefer bytes (base64) — Meta's documented approach; multipart often fails with "image failed to upload".
+        // Prefer bytes (base64) — Meta's documented approach.
         $encoded = base64_encode((string) file_get_contents($filePath));
 
         $bytesResponse = Http::timeout($timeout)
@@ -834,7 +915,13 @@ if (!is_array($targeting)) {
             $this->handleError($multipartResponse, 'uploadImage');
         }
 
-        return $multipartResponse->json();
+        $json = $multipartResponse->json();
+
+        if ($this->extractImageHashFromUploadResponse($json) === null) {
+            throw new Exception('Meta image upload failed: no image hash in response.');
+        }
+
+        return $json;
     }
 
     /**
