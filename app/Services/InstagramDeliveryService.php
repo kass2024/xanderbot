@@ -94,7 +94,36 @@ class InstagramDeliveryService
                 }
             });
 
+        $this->backfillInstagramEnabledFlags();
+
         return $stats;
+    }
+
+    /**
+     * Mark ads as IG-enabled when creative JSON already has instagram_user_id (UI status).
+     */
+    public function backfillInstagramEnabledFlags(): int
+    {
+        $count = 0;
+
+        Ad::query()
+            ->whereNotNull('meta_ad_id')
+            ->with('creative')
+            ->orderBy('id')
+            ->each(function (Ad $ad) use (&$count) {
+                if ($ad->instagram_enabled_at) {
+                    return;
+                }
+
+                if (! $ad->creative || ! $this->creativeHasInstagramActor($ad->creative)) {
+                    return;
+                }
+
+                $this->markAdInstagramEnabled($ad);
+                $count++;
+            });
+
+        return $count;
     }
 
     public function summaryMessage(array $stats): string
@@ -162,13 +191,17 @@ class InstagramDeliveryService
             return false;
         }
 
-        $changed = $this->meta->ensureAdSetTargetsInstagram((string) $adSet->meta_id);
+        $metaChanged = $this->meta->ensureAdSetTargetsInstagram((string) $adSet->meta_id);
 
         $localTargeting = is_array($adSet->targeting) ? $adSet->targeting : [];
         $patched = $this->meta->targetingWithFacebookAndInstagram($localTargeting);
-        $adSet->update(['targeting' => $patched]);
+        $localChanged = json_encode($patched) !== json_encode($localTargeting);
 
-        return $changed || $this->adSetMissingInstagram($localTargeting);
+        if ($localChanged) {
+            $adSet->update(['targeting' => $patched]);
+        }
+
+        return $metaChanged || $localChanged;
     }
 
     /**
@@ -449,7 +482,12 @@ class InstagramDeliveryService
      */
     public function auditAdDelivery(Ad $ad, array $placementDelivery = [], bool $verifyMetaLive = false): array
     {
-        $ad->loadMissing(['creative', 'adSet.campaign.adAccount']);
+        $ad->loadMissing(['adSet.campaign.adAccount']);
+
+        if ($ad->creative_id) {
+            $ad->unsetRelation('creative');
+            $ad->load('creative');
+        }
 
         $ig = $placementDelivery['instagram'] ?? [];
         $fb = $placementDelivery['facebook'] ?? [];
@@ -464,6 +502,7 @@ class InstagramDeliveryService
         $creativeHasIg = $ad->creative ? $this->creativeHasInstagramActor($ad->creative) : false;
         $enabledAt = $ad->instagram_enabled_at ?? null;
         $configuredOnMeta = $targetsIg && $creativeHasIg;
+        $markedEnabled = $enabledAt !== null;
 
         $metaCreativeHasIg = null;
         $metaCreativeError = null;
@@ -488,7 +527,7 @@ class InstagramDeliveryService
         if ($igImpressions > 0) {
             $status = 'live';
             $statusLabel = 'Delivering on Instagram ('.number_format($igImpressions).' impressions)';
-        } elseif ($configuredOnMeta || $enabledAt || $metaCreativeHasIg === true) {
+        } elseif ($markedEnabled || $configuredOnMeta || $metaCreativeHasIg === true) {
             $status = 'enabled';
             $statusLabel = 'IG enabled on Meta — waiting for impressions';
         } elseif ($targetsIg && $fbImpressions > 0) {
@@ -517,6 +556,7 @@ class InstagramDeliveryService
             'facebook_spend' => $fbSpend,
             'checks' => [
                 ['ok' => $targetsIg, 'label' => 'Ad set targets Instagram'],
+                ['ok' => $markedEnabled, 'label' => 'Enable IG applied (instagram_enabled_at)'],
                 ['ok' => $creativeHasIg, 'label' => 'Creative has instagram_user_id (local)'],
                 ['ok' => $metaCreativeHasIg === true, 'label' => 'Meta ad creative has instagram_user_id', 'note' => $metaCreativeHasIg === null ? 'Could not verify live' : null],
                 ['ok' => $igImpressions > 0, 'label' => 'Instagram impressions from Meta insights'],

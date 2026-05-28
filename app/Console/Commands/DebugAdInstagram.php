@@ -18,13 +18,19 @@ class DebugAdInstagram extends Command
 
     public function handle(InstagramDeliveryService $instagram, MetaAdsService $meta): int
     {
-        $key = (string) $this->argument('ad');
+        $key = trim((string) $this->argument('ad'));
 
-        $ad = Ad::query()
-            ->where('id', $key)
-            ->orWhere('meta_ad_id', $key)
-            ->with(['creative', 'adSet.campaign.adAccount'])
-            ->first();
+        $query = Ad::query()->with(['creative', 'adSet.campaign.adAccount']);
+
+        if (strlen($key) >= 12 && ctype_digit($key)) {
+            $ad = (clone $query)->where('meta_ad_id', $key)->first();
+        } else {
+            $ad = null;
+        }
+
+        if (! $ad) {
+            $ad = (clone $query)->where('id', $key)->first();
+        }
 
         if (! $ad) {
             $this->error('Ad not found: '.$key.' (use local ads.id or meta_ad_id from the table below).');
@@ -58,7 +64,8 @@ class DebugAdInstagram extends Command
 
         $placementDelivery = [];
         if ($this->option('run') && $ad->meta_ad_id) {
-            $accountId = $ad->adSet?->campaign?->adAccount?->meta_id ?? config('services.meta.ad_account_id');
+            $accountId = $ad->adSet?->campaign?->adAccount?->meta_id
+                ?? config('services.meta.ad_account_id');
             try {
                 $map = $meta->getAdPlacementInsightsMap($accountId, 'maximum');
                 $placementDelivery = $map[(string) $ad->meta_ad_id] ?? [];

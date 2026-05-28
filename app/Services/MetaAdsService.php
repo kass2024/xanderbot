@@ -197,6 +197,76 @@ protected function handleError($response, $endpoint, $payload = [])
         return $this->request('get',$endpoint,$params,false);
     }
 
+    /**
+     * Follow Meta Graph API paging.next URLs (full URL from insights/cursor responses).
+     */
+    protected function getByPagingUrl(string $url): array
+    {
+        $response = $this->client()->get($url, [
+            'access_token' => $this->accessToken,
+        ]);
+
+        if ($response->failed()) {
+            $this->handleError($response, $url, []);
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    protected function collectPagedData(string $endpoint, array $params): array
+    {
+        $rows = [];
+        $response = $this->get($endpoint, $params);
+
+        while (true) {
+            foreach ($response['data'] ?? [] as $row) {
+                if (is_array($row)) {
+                    $rows[] = $row;
+                }
+            }
+
+            $next = $response['paging']['next'] ?? null;
+            if (! is_string($next) || $next === '') {
+                break;
+            }
+
+            $response = $this->getByPagingUrl($next);
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Whether ad set targeting still needs FB+IG platforms and placement positions.
+     *
+     * @param  array<string, mixed>  $targeting
+     */
+    public function targetingNeedsInstagramRepair(array $targeting): bool
+    {
+        $platforms = $targeting['publisher_platforms'] ?? [];
+
+        if (! is_array($platforms)) {
+            return true;
+        }
+
+        if (! in_array('instagram', $platforms, true) || ! in_array('facebook', $platforms, true)) {
+            return true;
+        }
+
+        if (empty($targeting['instagram_positions']) || empty($targeting['facebook_positions'])) {
+            return true;
+        }
+
+        if (empty($targeting['device_platforms'])) {
+            return true;
+        }
+
+        return false;
+    }
+
     /*
     |--------------------------------------------------------------------------
     | POST
@@ -542,9 +612,7 @@ protected function handleError($response, $endpoint, $payload = [])
             $targeting = [];
         }
 
-        $platforms = $targeting['publisher_platforms'] ?? [];
-
-        if (is_array($platforms) && in_array('instagram', $platforms, true)) {
+        if (! $this->targetingNeedsInstagramRepair($targeting)) {
             return false;
         }
 
@@ -1703,7 +1771,7 @@ public function getAdPlacementInsightsMap(?string $accountId = null, string $pre
 {
     $accountId = $this->formatAccount($accountId ?? config('services.meta.ad_account_id'));
 
-    $response = $this->get("{$accountId}/insights", [
+    $rows = $this->collectPagedData("{$accountId}/insights", [
         'level' => 'ad',
         'breakdowns' => 'publisher_platform',
         'fields' => implode(',', ['ad_id', 'impressions', 'clicks', 'spend']),
@@ -1713,7 +1781,7 @@ public function getAdPlacementInsightsMap(?string $accountId = null, string $pre
 
     $map = [];
 
-    foreach ($response['data'] ?? [] as $row) {
+    foreach ($rows as $row) {
         $adId = (string) ($row['ad_id'] ?? '');
         $platform = strtolower((string) ($row['publisher_platform'] ?? 'unknown'));
 

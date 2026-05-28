@@ -46,8 +46,13 @@ class EnableInstagramDelivery extends Command
         $this->newLine();
 
         $stats = $instagram->repairAll();
+        $backfilled = $instagram->backfillInstagramEnabledFlags();
 
         $this->info($instagram->summaryMessage($stats));
+
+        if ($backfilled > 0) {
+            $this->line("Backfilled instagram_enabled_at on {$backfilled} ad(s).");
+        }
 
         $this->table(
             ['Type', 'Updated', 'Skipped', 'Failed'],

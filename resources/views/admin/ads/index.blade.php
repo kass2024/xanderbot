@@ -364,9 +364,7 @@ function renderCtr(ctr){
     return '<span class="font-semibold ctr-value ' + color + '">' + value.toFixed(2) + '%</span>';
 }
 
-const enableIgUrl = (adId) => @json(route('admin.ads.enable-instagram', ['ad' => 0])).replace('/0/', '/' + adId + '/');
-
-function renderPlatforms(placement, adId){
+function renderPlatforms(placement, adId, enableUrl){
     if(!placement){
         return '<span class="text-xs text-slate-400">—</span>';
     }
@@ -392,7 +390,7 @@ function renderPlatforms(placement, adId){
         if(fbImp > 0){
             sub = '<span class="text-[11px] text-slate-500">FB ' + fbImp.toLocaleString() + ' impr. · IG impressions pending</span>';
         }
-    } else if(status === 'pending' || (fbImp > 0 && targetsIg)){
+    } else if(status === 'pending'){
         badge = '<span class="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/15">FB only · IG pending</span>';
     } else if(fbImp > 0){
         badge = '<span class="inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-600/15">Facebook only</span>';
@@ -400,9 +398,9 @@ function renderPlatforms(placement, adId){
         badge = '<span class="inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-400/20">IG targeted · no data yet</span>';
     }
 
-    const showEnable = (status === 'pending' || status === 'not_configured') && adId;
+    const showEnable = (status === 'pending' || status === 'not_configured') && enableUrl;
     const enableBtn = showEnable
-        ? '<form method="POST" action="' + enableIgUrl(adId) + '" class="m-0"><input type="hidden" name="_token" value="{{ csrf_token() }}"><button type="submit" class="text-[11px] font-semibold text-fuchsia-700 underline">Enable IG</button></form>'
+        ? '<form method="POST" action="' + enableUrl + '" class="m-0"><input type="hidden" name="_token" value="{{ csrf_token() }}"><button type="submit" class="text-[11px] font-semibold text-fuchsia-700 underline">Enable IG</button></form>'
         : '';
 
     return '<div class="space-y-1">' + targetLine + badge + sub + enableBtn + '</div>';
@@ -481,7 +479,7 @@ async function refreshAdsDashboard(){
             }
 
             if(plt && ad.placement){
-                plt.innerHTML = renderPlatforms(ad.placement, ad.id);
+                plt.innerHTML = renderPlatforms(ad.placement, ad.id, ad.enable_instagram_url || '');
             }
 
         });

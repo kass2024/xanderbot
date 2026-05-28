@@ -225,7 +225,7 @@ class AdController extends Controller
     {
         return Ad::query()
             ->with([
-                'creative:id,name,image_url',
+                'creative:id,name,image_url,json_payload',
                 'adSet:id,name,campaign_id,targeting',
                 'adSet.campaign:id,name,ad_account_id',
                 'adSet.campaign.adAccount:id,name,meta_id',
@@ -287,25 +287,44 @@ class AdController extends Controller
             'daily_spend' => $ad->displayDailySpend(),
             'daily_budget' => (float) ($ad->daily_budget ?? 0),
             'pause_reason' => $ad->pause_reason ?? null,
+            'enable_instagram_url' => route('admin.ads.enable-instagram', $ad),
         ], [
             'placement' => $this->buildPlacementPayloadForAd($ad),
         ]);
     }
 
+    protected function resolveMetaAccountIdForAd(Ad $ad): ?string
+    {
+        $ad->loadMissing('adSet.campaign.adAccount');
+
+        $fromAd = $ad->adSet?->campaign?->adAccount?->meta_id;
+
+        return $fromAd ? (string) $fromAd : $this->resolveMetaAccountId();
+    }
+
     protected function hydratePlacementDeliveryFromMeta(iterable $ads): void
     {
-        $accountId = $this->resolveMetaAccountId();
+        $byAccount = [];
 
-        if (! $accountId) {
-            return;
+        foreach ($ads as $ad) {
+            $accountId = $this->resolveMetaAccountIdForAd($ad);
+
+            if (! $accountId) {
+                continue;
+            }
+
+            $byAccount[$accountId][] = $ad;
         }
 
-        try {
-            $this->applyPlacementDeliveryToAds($ads, $this->placementInsightsMap($accountId));
-        } catch (Throwable $e) {
-            Log::warning('ADS_PLACEMENT_INSIGHTS_FAILED', [
-                'error' => $e->getMessage(),
-            ]);
+        foreach ($byAccount as $accountId => $group) {
+            try {
+                $this->applyPlacementDeliveryToAds($group, $this->placementInsightsMap($accountId));
+            } catch (Throwable $e) {
+                Log::warning('ADS_PLACEMENT_INSIGHTS_FAILED', [
+                    'account_id' => $accountId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
     }
 
@@ -795,7 +814,7 @@ $ad = Ad::create([
     $placementDelivery = [];
     if (! empty($ad->meta_ad_id)) {
         try {
-            $accountId = $this->resolveMetaAccountId();
+            $accountId = $this->resolveMetaAccountIdForAd($ad);
             if ($accountId) {
                 $map = $this->meta->getAdPlacementInsightsMap($accountId, 'maximum');
                 $placementDelivery = $map[(string) $ad->meta_ad_id] ?? [];
@@ -1114,7 +1133,8 @@ public function enableInstagram(Ad $ad): RedirectResponse
 {
     try {
         $this->instagramDelivery->repairAd($ad, true);
-        $this->instagramDelivery->clearInsightsCaches($this->resolveMetaAccountId());
+        $ad->refresh();
+        $this->instagramDelivery->clearInsightsCaches($this->resolveMetaAccountIdForAd($ad));
 
         return back()->with(
             'success',
