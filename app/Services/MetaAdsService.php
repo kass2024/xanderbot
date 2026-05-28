@@ -766,30 +766,115 @@ if (!is_array($targeting)) {
     |--------------------------------------------------------------------------
     */
 
-    public function uploadImage(string $accountId,string $filePath):array
+    public function uploadImage(string $accountId, string $filePath): array
     {
-        $accountId = $this->formatAccount($accountId);
-
-        Log::info('META_UPLOAD_IMAGE',[
-            'account'=>$accountId,
-            'file'=>$filePath
-        ]);
-
-        $response = Http::timeout(60)
-            ->attach(
-                'filename',
-                file_get_contents($filePath),
-                basename($filePath)
-            )
-            ->post("{$this->baseUrl}/{$accountId}/adimages",[
-                'access_token'=>$this->accessToken
-            ]);
-
-        if($response->failed()){
-            $this->handleError($response,'uploadImage');
+        if (! is_file($filePath) || ! is_readable($filePath)) {
+            throw new Exception('Image file not found or not readable. Check server storage permissions.');
         }
 
-        return $response->json();
+        $this->validateImageForMetaUpload($filePath);
+
+        $accountId = $this->formatAccount($accountId);
+        $fileName = basename($filePath);
+        $timeout = max(120, (int) config('services.meta.http_timeout', 90));
+        $connectTimeout = (int) config('services.meta.http_connect_timeout', 45);
+
+        Log::info('META_UPLOAD_IMAGE', [
+            'account' => $accountId,
+            'file' => $filePath,
+            'bytes' => filesize($filePath),
+        ]);
+
+        // Prefer bytes (base64) — Meta's documented approach; multipart often fails with "image failed to upload".
+        $encoded = base64_encode((string) file_get_contents($filePath));
+
+        $bytesResponse = Http::timeout($timeout)
+            ->connectTimeout($connectTimeout)
+            ->asForm()
+            ->post("{$this->baseUrl}/{$accountId}/adimages", [
+                'access_token' => $this->accessToken,
+                'bytes' => $encoded,
+                'name' => $fileName,
+            ]);
+
+        if ($bytesResponse->successful()) {
+            $json = $bytesResponse->json();
+
+            if ($this->extractImageHashFromUploadResponse($json) !== null) {
+                return $json;
+            }
+        }
+
+        if ($bytesResponse->failed()) {
+            Log::warning('META_UPLOAD_IMAGE_BYTES_FAILED', [
+                'status' => $bytesResponse->status(),
+                'body' => $bytesResponse->json(),
+            ]);
+        }
+
+        // Fallback: multipart filename upload
+        $mime = mime_content_type($filePath) ?: 'image/jpeg';
+        $stream = fopen($filePath, 'rb');
+
+        try {
+            $multipartResponse = Http::timeout($timeout)
+                ->connectTimeout($connectTimeout)
+                ->attach('filename', $stream, $fileName, ['Content-Type' => $mime])
+                ->post("{$this->baseUrl}/{$accountId}/adimages", [
+                    'access_token' => $this->accessToken,
+                    'name' => $fileName,
+                ]);
+        } finally {
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+        }
+
+        if ($multipartResponse->failed()) {
+            $this->handleError($multipartResponse, 'uploadImage');
+        }
+
+        return $multipartResponse->json();
+    }
+
+    /**
+     * Parse image hash from Meta adimages upload response.
+     */
+    public function extractImageHashFromUploadResponse(?array $response): ?string
+    {
+        if (! is_array($response) || empty($response['images']) || ! is_array($response['images'])) {
+            return null;
+        }
+
+        foreach ($response['images'] as $image) {
+            if (is_array($image) && ! empty($image['hash'])) {
+                return (string) $image['hash'];
+            }
+        }
+
+        return null;
+    }
+
+    protected function validateImageForMetaUpload(string $filePath): void
+    {
+        $info = @getimagesize($filePath);
+
+        if ($info === false) {
+            throw new Exception('Invalid image file. Upload a JPG or PNG.');
+        }
+
+        $width = (int) ($info[0] ?? 0);
+        $height = (int) ($info[1] ?? 0);
+
+        if ($width < 200 || $height < 200) {
+            throw new Exception('Image is too small. Use at least 200×200 pixels.');
+        }
+
+        $size = filesize($filePath);
+
+        if ($size === false || $size > 30 * 1024 * 1024) {
+            throw new Exception('Image exceeds Meta’s 30MB upload limit.');
+        }
     }
 
     /*

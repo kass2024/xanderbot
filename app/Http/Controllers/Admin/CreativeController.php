@@ -128,14 +128,14 @@ class CreativeController extends Controller
 
         try {
 
-            $campaign = Campaign::findOrFail($data['campaign_id']);
+            $campaign = Campaign::with('adAccount')->findOrFail($data['campaign_id']);
 
             $adset = AdSet::findOrFail($data['adset_id']);
 
-            $account = AdAccount::whereNotNull('meta_id')->first();
+            $account = $campaign->adAccount ?? AdAccount::whereNotNull('meta_id')->first();
 
-            if (!$account) {
-                throw new Exception('Meta Ad Account not connected.');
+            if (! $account || ! $account->meta_id) {
+                throw new Exception('Meta Ad Account not connected for this campaign.');
             }
 
             $accountId = $account->meta_id;
@@ -158,6 +158,9 @@ class CreativeController extends Controller
 
             $imageFullPath = storage_path('app/public/'.$imagePath);
 
+            if (! is_file($imageFullPath)) {
+                throw new Exception('Stored image missing at '.$imageFullPath.'. Run php artisan storage:link on the server.');
+            }
 
             /*
             |--------------------------------------------------------------------------
@@ -176,16 +179,10 @@ class CreativeController extends Controller
 
                 Log::info('META_IMAGE_UPLOAD', $imageResponse);
 
-                if (!isset($imageResponse['images'])) {
-                    throw new Exception('Meta image upload failed.');
-                }
+                $imageHash = $this->meta->extractImageHashFromUploadResponse($imageResponse);
 
-                $image = current($imageResponse['images']);
-
-                $imageHash = $image['hash'] ?? null;
-
-                if (!$imageHash) {
-                    throw new Exception('Meta image hash missing.');
+                if (! $imageHash) {
+                    throw new Exception('Meta image upload failed: no image hash returned.');
                 }
             }
 
