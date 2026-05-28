@@ -115,6 +115,30 @@ class DebugAdInstagram extends Command
                 $this->error('  '.$e->getMessage());
             }
 
+            if ($ad->adSet?->meta_id) {
+                try {
+                    $adSetLive = $meta->getAdSet((string) $ad->adSet->meta_id);
+                    $targeting = $adSetLive['targeting'] ?? [];
+                    if (is_string($targeting)) {
+                        $decoded = json_decode($targeting, true);
+                        $targeting = is_array($decoded) ? $decoded : [];
+                    }
+                    $platforms = is_array($targeting['publisher_platforms'] ?? null)
+                        ? implode(', ', $targeting['publisher_platforms'])
+                        : '(automatic / not set)';
+                    $igPos = is_array($targeting['instagram_positions'] ?? null)
+                        ? implode(', ', $targeting['instagram_positions'])
+                        : '—';
+                    $this->line('  Ad set publisher_platforms (live Meta): '.$platforms);
+                    $this->line('  Ad set instagram_positions (live Meta): '.$igPos);
+                    if (is_string($platforms) && str_contains($platforms, 'audience_network')) {
+                        $this->warn('  Audience Network is still in ad set targeting — run meta:enable-instagram --force-adsets');
+                    }
+                } catch (Throwable $e) {
+                    $this->warn('  Ad set targeting fetch failed: '.$e->getMessage());
+                }
+            }
+
             try {
                 $this->line('  publisher_platform breakdown (maximum / lifetime):');
                 $rows = $meta->getInsights((string) $ad->meta_ad_id, 'maximum', ['breakdowns' => 'publisher_platform']);
@@ -148,6 +172,20 @@ class DebugAdInstagram extends Command
                         $this->line('    - '.($row['publisher_platform'] ?? '?').': '
                             .($row['impressions'] ?? 0).' impr, $'.($row['spend'] ?? 0));
                     }
+                }
+
+                $hasIgToday = false;
+                $todayRows = $meta->getInsights((string) $ad->meta_ad_id, 'today', ['breakdowns' => 'publisher_platform']);
+                foreach ($todayRows as $row) {
+                    if (($row['publisher_platform'] ?? '') === 'instagram' && (int) ($row['impressions'] ?? 0) > 0) {
+                        $hasIgToday = true;
+                    }
+                }
+                if (! $hasIgToday && ($audit['instagram_impressions'] ?? 0) === 0) {
+                    $this->newLine();
+                    $this->comment('  → Config is correct (IG enabled). Platform breakdown is from past delivery (AN+FB).');
+                    $this->comment('  → last_7d = $0 means no rolling-week spend; "today" may match lifetime if all spend was earlier today.');
+                    $this->comment('  → After --force-adsets, only NEW impressions can show instagram — watch Ads Manager 24–48h or duplicate the ad set.');
                 }
             } catch (Throwable $e) {
                 $this->error('  Insights: '.$e->getMessage());
