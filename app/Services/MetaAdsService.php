@@ -360,34 +360,148 @@ protected function handleError($response, $endpoint, $payload = [])
     }
 
     /**
-     * Instagram actor id for ad creatives — Page lookup, then env fallback.
+     * Instagram actor id for ad creatives — Page, ad account, then .env fallback.
      */
-    public function resolveInstagramUserId(string $pageId): ?string
+    public function resolveInstagramUserId(?string $pageId = null): ?string
     {
-        $pageId = trim($pageId);
-        if ($pageId !== '') {
-            foreach (['connected_instagram_account{id}', 'instagram_business_account{id}'] as $fields) {
-                try {
-                    $res = $this->get($pageId, ['fields' => $fields]);
-                    $key = str_contains($fields, 'connected') ? 'connected_instagram_account' : 'instagram_business_account';
-                    $account = $res[$key] ?? null;
-
-                    if (is_array($account) && ! empty($account['id'])) {
-                        return (string) $account['id'];
-                    }
-                } catch (Exception $e) {
-                    Log::warning('META_PAGE_INSTAGRAM_LOOKUP_FAILED', [
-                        'page_id' => $pageId,
-                        'fields' => $fields,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
+        foreach ($this->instagramPageIdCandidates($pageId) as $candidate) {
+            $found = $this->lookupInstagramIdFromPage($candidate);
+            if ($found !== null) {
+                return $found;
             }
+        }
+
+        $fromAccount = $this->lookupInstagramIdFromAdAccount();
+        if ($fromAccount !== null) {
+            return $fromAccount;
         }
 
         $fromEnv = trim((string) config('services.meta.instagram_user_id', ''));
 
         return $fromEnv !== '' ? $fromEnv : null;
+    }
+
+    /**
+     * Connection diagnostics for CLI / admin checks.
+     *
+     * @return array<string, mixed>
+     */
+    public function diagnoseInstagramConnection(?string $pageId = null): array
+    {
+        $pageId = trim((string) ($pageId ?? config('services.meta.page_id', '')));
+        $report = [
+            'page_id' => $pageId,
+            'ad_account_id' => config('services.meta.ad_account_id'),
+            'instagram_user_id' => null,
+            'source' => null,
+            'page_connected' => false,
+            'env_fallback' => trim((string) config('services.meta.instagram_user_id', '')) !== '',
+            'ready' => false,
+            'hints' => [],
+        ];
+
+        if ($pageId !== '') {
+            foreach (['connected_instagram_account{id,username}', 'instagram_business_account{id,username}'] as $fields) {
+                try {
+                    $res = $this->get($pageId, ['fields' => $fields]);
+                    $key = str_contains($fields, 'connected') ? 'connected_instagram_account' : 'instagram_business_account';
+                    $account = $res[$key] ?? null;
+                    if (is_array($account) && ! empty($account['id'])) {
+                        $report['page_connected'] = true;
+                        $report['instagram_user_id'] = (string) $account['id'];
+                        $report['instagram_username'] = $account['username'] ?? null;
+                        $report['source'] = 'page:'.$key;
+                        break;
+                    }
+                } catch (Exception $e) {
+                    $report['page_errors'][] = $fields.': '.$e->getMessage();
+                }
+            }
+        }
+
+        if ($report['instagram_user_id'] === null) {
+            $fromAccount = $this->lookupInstagramIdFromAdAccount();
+            if ($fromAccount !== null) {
+                $report['instagram_user_id'] = $fromAccount;
+                $report['source'] = 'ad_account:instagram_accounts';
+            }
+        }
+
+        if ($report['instagram_user_id'] === null && $report['env_fallback']) {
+            $report['instagram_user_id'] = trim((string) config('services.meta.instagram_user_id', ''));
+            $report['source'] = 'env:META_INSTAGRAM_USER_ID';
+        }
+
+        $report['ready'] = $report['instagram_user_id'] !== null && $report['instagram_user_id'] !== '';
+
+        if (! $report['ready']) {
+            $report['hints'] = [
+                'Confirm the Page in META_PAGE_ID is linked to Instagram in business.facebook.com → Settings → Accounts.',
+                'Assign the Page to your Business portfolio and ensure the system user has access.',
+                'Or set META_INSTAGRAM_USER_ID in .env (Instagram account numeric ID).',
+            ];
+        }
+
+        return $report;
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function instagramPageIdCandidates(?string $pageId): array
+    {
+        $ids = [
+            trim((string) $pageId),
+            trim((string) config('services.meta.page_id', '')),
+        ];
+
+        return array_values(array_unique(array_filter($ids)));
+    }
+
+    protected function lookupInstagramIdFromPage(string $pageId): ?string
+    {
+        foreach (['connected_instagram_account{id}', 'instagram_business_account{id}'] as $fields) {
+            try {
+                $res = $this->get($pageId, ['fields' => $fields]);
+                $key = str_contains($fields, 'connected') ? 'connected_instagram_account' : 'instagram_business_account';
+                $account = $res[$key] ?? null;
+
+                if (is_array($account) && ! empty($account['id'])) {
+                    return (string) $account['id'];
+                }
+            } catch (Exception $e) {
+                Log::warning('META_PAGE_INSTAGRAM_LOOKUP_FAILED', [
+                    'page_id' => $pageId,
+                    'fields' => $fields,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return null;
+    }
+
+    protected function lookupInstagramIdFromAdAccount(?string $accountId = null): ?string
+    {
+        try {
+            $accountId = $this->formatAccount($accountId ?? config('services.meta.ad_account_id'));
+            $res = $this->get("{$accountId}/instagram_accounts", [
+                'fields' => 'id,username',
+                'limit' => 5,
+            ]);
+
+            foreach ($res['data'] ?? [] as $row) {
+                if (! empty($row['id'])) {
+                    return (string) $row['id'];
+                }
+            }
+        } catch (Exception $e) {
+            Log::warning('META_AD_ACCOUNT_INSTAGRAM_LOOKUP_FAILED', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
     }
 
     /**

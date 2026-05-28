@@ -115,15 +115,40 @@ class InstagramDeliveryService
     }
 
     /**
+     * @return array<string, mixed>
+     */
+    public function verify(): array
+    {
+        $diagnosis = $this->meta->diagnoseInstagramConnection();
+
+        return array_merge($diagnosis, [
+            'entities' => [
+                'campaigns' => Campaign::query()->whereNotNull('meta_id')->count(),
+                'adsets' => AdSet::query()->whereNotNull('meta_id')->count(),
+                'creatives' => Creative::query()->whereNotNull('meta_id')->count(),
+                'ads' => Ad::query()->whereNotNull('meta_ad_id')->count(),
+            ],
+            'new_ads' => [
+                'adset_placements' => 'Facebook + Instagram on create (automatic & manual)',
+                'creative' => 'instagram_user_id on Meta creative create',
+                'ad' => 'IG-enabled creative preferred on create',
+            ],
+        ]);
+    }
+
+    /**
      * @throws Exception
      */
     public function assertInstagramConfigured(?string $pageId = null): void
     {
-        $pageId = trim((string) ($pageId ?? config('services.meta.page_id', '')));
-
         if ($this->meta->resolveInstagramUserId($pageId) === null) {
+            $diag = $this->meta->diagnoseInstagramConnection($pageId);
+            $page = $diag['page_id'] ?: '(META_PAGE_ID not set)';
+
             throw new Exception(
-                'No Instagram account found for your Facebook Page. Link Instagram in Meta Business Suite, or set META_INSTAGRAM_USER_ID in .env.'
+                'No Instagram account found for Facebook Page '.$page.'. '
+                .'Link the Page to Instagram in Meta Business Suite, assign the Page to your Business/system user, '
+                .'or set META_INSTAGRAM_USER_ID in .env. Run: php artisan meta:verify-instagram'
             );
         }
     }

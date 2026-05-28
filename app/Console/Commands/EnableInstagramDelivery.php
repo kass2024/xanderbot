@@ -36,9 +36,14 @@ class EnableInstagramDelivery extends Command
             $instagram->assertInstagramConfigured();
         } catch (Throwable $e) {
             $this->error($e->getMessage());
+            $this->comment('Run: php artisan meta:verify-instagram');
 
             return Command::FAILURE;
         }
+
+        $diag = $instagram->verify();
+        $this->line('Using Instagram ID '.$diag['instagram_user_id'].' ('.$diag['source'].')');
+        $this->newLine();
 
         $stats = $instagram->repairAll();
 
