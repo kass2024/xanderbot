@@ -158,19 +158,37 @@ class AdBudgetGuard
         }
     }
 
+    /**
+     * Today's spend for budget decisions (Meta session + stored daily_spend, whichever is higher).
+     */
+    public static function dailySessionSpend(Ad $ad, ?float $metaTodaySpend = null): float
+    {
+        $fromDb = (float) ($ad->daily_spend ?? 0);
+        $fromMeta = $metaTodaySpend !== null
+            ? static::sessionSpend($ad, $metaTodaySpend)
+            : 0;
+
+        return max($fromDb, $fromMeta);
+    }
+
+    public static function shouldAutoPauseForBudget(Ad $ad, ?float $metaTodaySpend = null): bool
+    {
+        $budget = (float) $ad->daily_budget;
+
+        if ($budget <= 0) {
+            return false;
+        }
+
+        return static::dailySessionSpend($ad, $metaTodaySpend) >= $budget - 0.001;
+    }
+
     public static function enforce(Ad $ad, MetaAdsService $meta, ?float $metaTodaySpend = null): void
     {
         if (! $ad->meta_ad_id || ! $ad->daily_budget || $ad->daily_budget <= 0) {
             return;
         }
 
-        if ($metaTodaySpend !== null) {
-            $session = static::sessionSpend($ad, $metaTodaySpend);
-        } else {
-            $session = (float) $ad->daily_spend;
-        }
-
-        if ($session < (float) $ad->daily_budget) {
+        if (! static::shouldAutoPauseForBudget($ad, $metaTodaySpend)) {
             return;
         }
 
@@ -218,6 +236,7 @@ class AdBudgetGuard
                 'ad_id' => $ad->id,
                 'meta_ad_id' => $ad->meta_ad_id,
                 'daily_budget' => $ad->daily_budget,
+                'session_spend' => static::dailySessionSpend($ad, $metaTodaySpend),
             ]);
         } catch (Throwable $e) {
             Log::warning('AD_AUTO_PAUSE_BUDGET_FAILED', [

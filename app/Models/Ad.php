@@ -267,12 +267,15 @@ protected $fillable = [
 
     public function hasReachedDailyBudget(): bool
     {
+        if ((float) $this->daily_budget <= 0) {
+            return false;
+        }
+
         if ($this->pause_reason === 'budget_limit' && $this->status === self::STATUS_PAUSED) {
             return false;
         }
 
-        return (float) $this->daily_budget > 0
-            && (float) $this->daily_spend >= (float) $this->daily_budget;
+        return (float) $this->daily_spend >= (float) $this->daily_budget - 0.001;
     }
 
     public function displayDailySpend(): float

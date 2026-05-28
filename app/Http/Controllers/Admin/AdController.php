@@ -524,6 +524,10 @@ class AdController extends Controller
         $metaHasActivity = $metaImpressions > 0 || $metaClicks > 0 || $metaSpend > 0.00001;
 
         if ($hadLocal && ! $metaHasActivity) {
+            if ($enforceBudget) {
+                AdBudgetGuard::enforce($ad, $this->meta, null);
+            }
+
             return;
         }
 
@@ -573,6 +577,19 @@ class AdController extends Controller
 
         if ($enforceBudget) {
             AdBudgetGuard::enforce($ad, $this->meta, $metaTodaySpend);
+        }
+    }
+
+    protected function enforceDailyBudgetsOnAds(iterable $ads): void
+    {
+        foreach ($ads as $ad) {
+            if ($ad->status !== Ad::STATUS_ACTIVE || (float) ($ad->daily_budget ?? 0) <= 0) {
+                continue;
+            }
+
+            if (AdBudgetGuard::shouldAutoPauseForBudget($ad, null)) {
+                AdBudgetGuard::enforce($ad, $this->meta, null);
+            }
         }
     }
 
@@ -709,11 +726,19 @@ class AdController extends Controller
                 $enforceBudget,
             );
 
+            if ($enforceBudget) {
+                $this->enforceDailyBudgetsOnAds($ads);
+            }
+
             return true;
         } catch (Throwable $e) {
             Log::warning('ADS_LIVE_METRICS_REFRESH_FAILED', [
                 'error' => $e->getMessage(),
             ]);
+
+            if ($enforceBudget) {
+                $this->enforceDailyBudgetsOnAds($ads);
+            }
 
             return false;
         }
@@ -857,6 +882,7 @@ class AdController extends Controller
 
         $allAds = $this->adsMetricsQuery()->get();
         $this->hydrateLiveMetricsFromMeta($allAds, false, true);
+        $this->enforceDailyBudgetsOnAds($allAds);
         $this->hydratePlacementDeliveryFromMeta($allAds);
 
         $freshMap = $allAds->keyBy('id');
