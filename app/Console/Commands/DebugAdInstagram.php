@@ -27,7 +27,31 @@ class DebugAdInstagram extends Command
             ->first();
 
         if (! $ad) {
-            $this->error('Ad not found: '.$key);
+            $this->error('Ad not found: '.$key.' (use local ads.id or meta_ad_id from the table below).');
+            $this->newLine();
+
+            $rows = Ad::query()
+                ->whereNotNull('meta_ad_id')
+                ->orderBy('id')
+                ->get(['id', 'name', 'meta_ad_id', 'status']);
+
+            if ($rows->isEmpty()) {
+                $this->warn('No synced ads in database. Sync from Meta or create ads in Ads Manager first.');
+
+                return Command::FAILURE;
+            }
+
+            $this->info('Synced ads in database:');
+            $this->table(
+                ['Local ID', 'Meta ad ID', 'Status', 'Name'],
+                $rows->map(fn (Ad $a) => [
+                    $a->id,
+                    $a->meta_ad_id,
+                    $a->status,
+                    \Illuminate\Support\Str::limit($a->name, 50),
+                ])->all()
+            );
+            $this->comment('Example: php artisan meta:debug-ad-ig '.$rows->first()->id.' --run');
 
             return Command::FAILURE;
         }
