@@ -14,6 +14,7 @@ MIGRATIONS=(
   "database/migrations/2026_05_25_120000_add_daily_spend_anchor_to_ads.php"
   "database/migrations/2026_05_28_100000_align_meta_ads_schema.php"
   "database/migrations/2026_05_28_120000_add_campaign_daily_budget_column.php"
+  "database/migrations/2026_05_29_120000_add_ads_instagram_enabled_at.php"
 )
 
 echo "=== Current migration status (last 15) ==="
@@ -38,6 +39,8 @@ echo PHP_EOL;
 echo in_array('daily_spend_anchor', \$cols) ? 'daily_spend_anchor OK' : 'MISSING daily_spend_anchor';
 echo PHP_EOL;
 echo in_array('pause_reason', \$cols) ? 'pause_reason OK' : 'MISSING pause_reason';
+echo PHP_EOL;
+echo in_array('instagram_enabled_at', \$cols) ? 'instagram_enabled_at OK' : 'MISSING instagram_enabled_at';
 echo PHP_EOL;
 "
 
