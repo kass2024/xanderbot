@@ -182,9 +182,16 @@ class DebugAdInstagram extends Command
                 }
                 if (! $hasIgToday && ($audit['instagram_impressions'] ?? 0) === 0) {
                     $this->newLine();
-                    $this->comment('  → Config OK. Legacy ad + AN/FB today: run php artisan meta:enable-instagram --reprovision once.');
-                    $this->comment('  → Or click Enable IG (all existing) in Ads Manager — creates new Meta ad ids for legacy campaigns.');
-                    $this->comment('  → Old impressions stay on the paused ad; watch NEW meta_ad_id for instagram in breakdown.');
+                    $fb = (int) ($audit['facebook_impressions'] ?? 0);
+                    $an = (int) ($audit['audience_network_impressions'] ?? 0);
+                    if ($fb === 0 && $an === 0 && $totalImpr === 0) {
+                        $this->comment('  → Setup OK (new/clean Meta ad). No impressions yet on this ad id — normal after reprovision.');
+                        $this->comment('  → Ensure campaign, ad set, and ad are ACTIVE with budget; IG live appears after first instagram impressions.');
+                        $this->line('  → Meta ad id: '.($ad->meta_ad_id ?? '—'));
+                    } else {
+                        $this->comment('  → Config OK. If today still shows FB/AN without IG: php artisan meta:enable-instagram --reprovision');
+                        $this->comment('  → Watch this meta_ad_id for instagram in the today breakdown after new spend.');
+                    }
                 }
             } catch (Throwable $e) {
                 $this->error('  Insights: '.$e->getMessage());
