@@ -207,7 +207,7 @@ class CreativeController extends Controller
                 if (empty($landingUrl)) {
                     throw new Exception('Destination URL is required when syncing a creative to Meta.');
                 }
-                $normalizedLanding = $this->meta->normalizeLandingUrlForMeta($landingUrl);
+                $normalizedLanding = $this->meta->normalizeLandingUrlForMeta($landingUrl, false);
             }
 
             $linkData = [

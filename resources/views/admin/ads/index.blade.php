@@ -374,10 +374,11 @@ async function refreshAdsDashboard(){
     running = true;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let response = null;
 
     try{
 
-        const response = await fetch(
+        response = await fetch(
             "{{ route('admin.ads.live') }}?t="+Date.now(),
             {
                 credentials: 'same-origin',
@@ -409,15 +410,17 @@ async function refreshAdsDashboard(){
             throw new Error('Live refresh returned invalid payload');
         }
 
+        const metrics = data.metrics || {};
+
         const totalAds = document.getElementById('metric-total-ads');
         const activeAds = document.getElementById('metric-active-ads');
         const totalSpend = document.getElementById('metric-total-spend');
         const totalClicks = document.getElementById('metric-total-clicks');
 
-        if(totalAds) totalAds.textContent = number(data.metrics.total_ads);
-        if(activeAds) activeAds.textContent = number(data.metrics.active_ads);
-        if(totalSpend) totalSpend.textContent = money(data.metrics.total_spend);
-        if(totalClicks) totalClicks.textContent = number(data.metrics.total_clicks);
+        if(totalAds) totalAds.textContent = number(metrics.total_ads);
+        if(activeAds) activeAds.textContent = number(metrics.active_ads);
+        if(totalSpend) totalSpend.textContent = money(metrics.total_spend);
+        if(totalClicks) totalClicks.textContent = number(metrics.total_clicks);
 
         data.ads.forEach(ad => {
 
@@ -449,6 +452,8 @@ async function refreshAdsDashboard(){
         console.warn('Live dashboard update failed', e);
         if(e && e.name === 'AbortError'){
             setLiveStatus(true, null, 'refresh slow — showing last saved metrics');
+        } else if(response && response.ok){
+            setLiveStatus(true, null, 'partial update — showing saved metrics');
         } else {
             setLiveStatus(false);
         }
