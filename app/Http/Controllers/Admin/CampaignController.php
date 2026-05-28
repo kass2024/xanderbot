@@ -11,7 +11,6 @@ use App\Models\Campaign;
 use App\Models\AdAccount;
 use App\Models\AdSet;
 use App\Services\MetaAdsService;
-use App\Support\TenantScope;
 
 use Illuminate\Support\Facades\Schema;
 use Throwable;
@@ -273,8 +272,6 @@ class CampaignController extends Controller
 
     public function edit(Campaign $campaign)
     {
-        TenantScope::assertCampaign($campaign);
-
         return view('admin.campaigns.edit', [
             'campaign' => $campaign,
         ]);
@@ -288,8 +285,6 @@ class CampaignController extends Controller
 
     public function update(Request $request, Campaign $campaign)
     {
-        TenantScope::assertCampaign($campaign);
-
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'objective' => 'required|in:OUTCOME_TRAFFIC,OUTCOME_LEADS,OUTCOME_ENGAGEMENT,OUTCOME_AWARENESS,OUTCOME_SALES',

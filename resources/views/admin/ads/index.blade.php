@@ -24,10 +24,6 @@
         <p class="mt-1 text-sm text-slate-600">
             Create, publish and monitor ad delivery performance.
         </p>
-        <p class="mt-2 inline-flex items-center gap-2 text-xs text-slate-500">
-            <span id="live-indicator" class="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true"></span>
-            <span id="live-status">Live from Meta — updating…</span>
-        </p>
     </div>
     <div class="flex flex-shrink-0 flex-wrap items-center gap-2 sm:gap-3">
         <a
@@ -66,19 +62,19 @@ ALERTS
 <div class="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
     <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
         <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Total ads</p>
-        <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900" id="metric-total-ads">{{ $metrics['total_ads'] }}</p>
+        <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900" id="metric-total-ads">{{ $ads->total() }}</p>
     </div>
     <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
         <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Active</p>
-        <p class="mt-1 text-2xl font-bold tabular-nums text-emerald-600" id="metric-active-ads">{{ $metrics['active_ads'] }}</p>
+        <p class="mt-1 text-2xl font-bold tabular-nums text-emerald-600" id="metric-active-ads">{{ $ads->getCollection()->where('status','ACTIVE')->count() }}</p>
     </div>
     <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
         <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Total spend</p>
-        <p class="mt-1 text-2xl font-bold tabular-nums text-xander-navy" id="metric-total-spend">${{ number_format($metrics['total_spend'], 2) }}</p>
+        <p class="mt-1 text-2xl font-bold tabular-nums text-xander-navy" id="metric-total-spend">${{ number_format($ads->getCollection()->sum('spend'),2) }}</p>
     </div>
     <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
         <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Clicks</p>
-        <p class="mt-1 text-2xl font-bold tabular-nums text-slate-800" id="metric-total-clicks">{{ number_format($metrics['total_clicks']) }}</p>
+        <p class="mt-1 text-2xl font-bold tabular-nums text-slate-800" id="metric-total-clicks">{{ number_format($ads->getCollection()->sum('clicks')) }}</p>
     </div>
 </div>
 
@@ -186,16 +182,16 @@ ALERTS
 <td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" id="clk-{{ $ad->id }}">{{ number_format($ad->clicks ?? 0) }}</td>
 
 {{-- CTR --}}
-<td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" id="ctr-{{ $ad->id }}">
+<td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">
 @php $ctr = $ad->ctr ?? 0; @endphp
-<span class="font-semibold ctr-value @if($ctr > 3) text-emerald-600 @elseif($ctr > 1) text-amber-600 @else text-slate-600 @endif">{{ number_format($ctr,2) }}%</span>
+<span class="font-semibold @if($ctr > 3) text-emerald-600 @elseif($ctr > 1) text-amber-600 @else text-slate-600 @endif">{{ number_format($ctr,2) }}%</span>
 </td>
 
 {{-- SPEND --}}
 <td class="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-800 lg:px-5" id="spend-{{ $ad->id }}">${{ number_format($ad->spend ?? 0,2) }}</td>
 
 {{-- TODAY --}}
-<td class="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-xander-secondary lg:px-5" id="today-{{ $ad->id }}">${{ number_format($ad->displayDailySpend(), 2) }}</td>
+<td class="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-xander-secondary lg:px-5" id="today-{{ $ad->id }}">${{ number_format($ad->daily_spend ?? 0,2) }}</td>
 
 {{-- BUDGET --}}
 <td class="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums text-slate-700 lg:px-5">${{ number_format($ad->daily_budget ?? 0,2) }}</td>
@@ -220,13 +216,7 @@ ALERTS
         @if($ad->status !== 'ACTIVE')
             <form method="POST" action="{{ route('admin.ads.publish',$ad->id) }}" class="m-0">
                 @csrf
-                <button type="submit" class="w-full rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15 transition hover:bg-emerald-100">
-                    @if($ad->pause_reason === 'budget_limit')
-                        Publish again
-                    @else
-                        Publish
-                    @endif
-                </button>
+                <button type="submit" class="w-full rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15 transition hover:bg-emerald-100">Publish</button>
             </form>
         @endif
         @if($ad->status === 'ACTIVE')
@@ -286,8 +276,6 @@ LIVE AJAX DASHBOARD UPDATE
 (function(){
 
 let running = false;
-const REFRESH_MS = 20000;
-const FETCH_TIMEOUT_MS = 45000;
 
 /* =============================
    FORMATTERS
@@ -299,25 +287,6 @@ function money(v){
 
 function number(v){
     return Number(v || 0).toLocaleString();
-}
-
-function setLiveStatus(ok, refreshedAt, warning){
-    const status = document.getElementById('live-status');
-    const dot = document.getElementById('live-indicator');
-
-    if(!status || !dot){
-        return;
-    }
-
-    if(ok){
-        dot.className = 'inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse';
-        const time = refreshedAt ? new Date(refreshedAt).toLocaleTimeString() : new Date().toLocaleTimeString();
-        const suffix = warning ? ' — ' + warning : '';
-        status.textContent = 'Live from Meta — updated ' + time + ' (auto every ' + (REFRESH_MS / 1000) + 's)' + suffix;
-    } else {
-        dot.className = 'inline-flex h-2 w-2 rounded-full bg-amber-500 animate-pulse';
-        status.textContent = 'Reconnecting to Meta live feed…';
-    }
 }
 
 
@@ -349,20 +318,6 @@ function renderStatus(status){
 }
 
 
-function renderCtr(ctr){
-    const value = Number(ctr || 0);
-    let color = 'text-slate-600';
-
-    if(value > 3){
-        color = 'text-emerald-600';
-    } else if(value > 1){
-        color = 'text-amber-600';
-    }
-
-    return '<span class="font-semibold ctr-value ' + color + '">' + value.toFixed(2) + '%</span>';
-}
-
-
 /* =============================
    MAIN REFRESH FUNCTION
 ============================= */
@@ -372,70 +327,53 @@ async function refreshAdsDashboard(){
     if(running) return;
 
     running = true;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    let response = null;
 
     try{
 
-        response = await fetch(
+        const response = await fetch(
             "{{ route('admin.ads.live') }}?t="+Date.now(),
             {
-                credentials: 'same-origin',
-                cache: 'no-store',
-                signal: controller.signal,
                 headers:{
-                    'X-Requested-With':'XMLHttpRequest',
-                    'Accept': 'application/json'
+                    'X-Requested-With':'XMLHttpRequest'
                 }
             }
         );
 
-        clearTimeout(timeoutId);
-
-        const raw = await response.text();
-        let data;
-
-        try {
-            data = JSON.parse(raw);
-        } catch (parseError) {
-            throw new Error('Live endpoint returned non-JSON response');
-        }
-
         if(!response.ok){
-            throw new Error((data && data.error) || 'Live refresh failed');
+            throw new Error('Network response failed');
         }
 
-        if(!data || !Array.isArray(data.ads)){
-            data = data || {};
-            data.ads = [];
-            data.metrics = data.metrics || {};
-        }
+        const data = await response.json();
 
-        const metrics = data.metrics || {};
+        /* =============================
+           UPDATE METRICS
+        ============================= */
 
         const totalAds = document.getElementById('metric-total-ads');
         const activeAds = document.getElementById('metric-active-ads');
         const totalSpend = document.getElementById('metric-total-spend');
         const totalClicks = document.getElementById('metric-total-clicks');
 
-        if(totalAds) totalAds.textContent = number(metrics.total_ads);
-        if(activeAds) activeAds.textContent = number(metrics.active_ads);
-        if(totalSpend) totalSpend.textContent = money(metrics.total_spend);
-        if(totalClicks) totalClicks.textContent = number(metrics.total_clicks);
+        if(totalAds) totalAds.textContent = number(data.metrics.total_ads);
+        if(activeAds) activeAds.textContent = number(data.metrics.active_ads);
+        if(totalSpend) totalSpend.textContent = money(data.metrics.total_spend);
+        if(totalClicks) totalClicks.textContent = number(data.metrics.total_clicks);
+
+
+        /* =============================
+           UPDATE TABLE ROWS
+        ============================= */
 
         data.ads.forEach(ad => {
 
             const imp = document.getElementById('imp-'+ad.id);
             const clk = document.getElementById('clk-'+ad.id);
-            const ctr = document.getElementById('ctr-'+ad.id);
             const spn = document.getElementById('spend-'+ad.id);
             const tdy = document.getElementById('today-'+ad.id);
             const sts = document.getElementById('status-'+ad.id);
 
             if(imp) imp.textContent = number(ad.impressions);
             if(clk) clk.textContent = number(ad.clicks);
-            if(ctr) ctr.innerHTML = renderCtr(ad.ctr);
             if(spn) spn.textContent = money(ad.spend);
             if(tdy) tdy.textContent = money(ad.daily_spend);
 
@@ -445,35 +383,32 @@ async function refreshAdsDashboard(){
 
         });
 
-        const warning = data.warning || (data.meta_synced === false ? 'using saved metrics' : '');
-        setLiveStatus(true, data.refreshed_at, warning);
+        console.log('Ads dashboard refreshed', data);
 
     }
     catch(e){
 
         console.warn('Live dashboard update failed', e);
-        setLiveStatus(true, null, (e && e.name === 'AbortError')
-            ? 'refresh slow — showing last saved metrics'
-            : 'using saved metrics — will retry');
 
     }
-    finally {
-        clearTimeout(timeoutId);
-        running = false;
-    }
+
+    running = false;
 
 }
 
 
+/* =============================
+   START
+============================= */
+
 refreshAdsDashboard();
 
-setInterval(refreshAdsDashboard, REFRESH_MS);
 
-document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible'){
-        refreshAdsDashboard();
-    }
-});
+/* =============================
+   AUTO REFRESH (5s)
+============================= */
+
+setInterval(refreshAdsDashboard, 5000);
 
 
 })();

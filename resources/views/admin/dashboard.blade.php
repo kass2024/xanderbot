@@ -6,12 +6,6 @@
 
 <div class="mx-auto max-w-7xl space-y-8">
 
-    @if(!empty($dashboardError))
-        <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            {{ $dashboardError }}
-        </div>
-    @endif
-
     <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-xander-navy sm:text-3xl">Overview</h1>
