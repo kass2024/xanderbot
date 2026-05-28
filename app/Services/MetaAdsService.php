@@ -1253,4 +1253,41 @@ public function getAccountStatus($accountId)
 
     return $response->json();
 }
+
+/**
+ * Fetch ad-level insights in one Meta request, keyed by Meta ad id.
+ *
+ * @return array<string, array<string, mixed>>
+ */
+public function getAdInsightsMap(?string $accountId = null, string $preset = 'maximum'): array
+{
+    $this->ensureConfigured();
+
+    $accountId = $this->formatAccount($accountId ?? $this->defaultAccount);
+
+    $response = $this->get("{$accountId}/insights", [
+        'level' => 'ad',
+        'fields' => implode(',', [
+            'ad_id',
+            'impressions',
+            'clicks',
+            'spend',
+            'ctr',
+        ]),
+        'date_preset' => $preset,
+        'limit' => 500,
+    ]);
+
+    $map = [];
+
+    foreach ($response['data'] ?? [] as $row) {
+        $adId = (string) ($row['ad_id'] ?? '');
+
+        if ($adId !== '') {
+            $map[$adId] = $row;
+        }
+    }
+
+    return $map;
+}
 }

@@ -312,7 +312,7 @@ class CreativeController extends Controller
 
                 'body' => $data['body'] ?? null,
 
-                'destination_url' => $data['destination_url'] ?? null,
+                'destination_url' => $normalizedLanding ?? ($data['destination_url'] ?? null),
 
                 'call_to_action' => $data['call_to_action'] ?? null,
 'image_url' => Storage::url($imagePath),
