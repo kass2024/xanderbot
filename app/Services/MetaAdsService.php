@@ -5,6 +5,7 @@ namespace App\Services;
 use Exception;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class MetaAdsService
 {
@@ -33,6 +34,15 @@ class MetaAdsService
             'account'=>$this->defaultAccount,
             'graph_version'=>$version
         ]);
+    }
+
+    protected function ensureConfigured(): void
+    {
+        if (! $this->accessToken) {
+            throw new Exception(
+                'Meta access token missing. Set META_SYSTEM_USER_TOKEN in .env.'
+            );
+        }
     }
 
     /*
@@ -1305,33 +1315,42 @@ public function getAccountStatus($accountId)
  */
 public function getAdInsightsMap(?string $accountId = null, string $preset = 'maximum'): array
 {
-    $this->ensureConfigured();
+    try {
+        $this->ensureConfigured();
 
-    $accountId = $this->formatAccount($accountId ?? $this->defaultAccount);
+        $accountId = $this->formatAccount($accountId ?? $this->defaultAccount);
 
-    $response = $this->get("{$accountId}/insights", [
-        'level' => 'ad',
-        'fields' => implode(',', [
-            'ad_id',
-            'impressions',
-            'clicks',
-            'spend',
-            'ctr',
-        ]),
-        'date_preset' => $preset,
-        'limit' => 500,
-    ]);
+        $response = $this->get("{$accountId}/insights", [
+            'level' => 'ad',
+            'fields' => implode(',', [
+                'ad_id',
+                'impressions',
+                'clicks',
+                'spend',
+                'ctr',
+            ]),
+            'date_preset' => $preset,
+            'limit' => 500,
+        ]);
 
-    $map = [];
+        $map = [];
 
-    foreach ($response['data'] ?? [] as $row) {
-        $adId = (string) ($row['ad_id'] ?? '');
+        foreach ($response['data'] ?? [] as $row) {
+            $adId = (string) ($row['ad_id'] ?? '');
 
-        if ($adId !== '') {
-            $map[$adId] = $row;
+            if ($adId !== '') {
+                $map[$adId] = $row;
+            }
         }
-    }
 
-    return $map;
+        return $map;
+    } catch (Throwable $e) {
+        Log::warning('META_AD_INSIGHTS_MAP_FAILED', [
+            'preset' => $preset,
+            'error' => $e->getMessage(),
+        ]);
+
+        return [];
+    }
 }
 }

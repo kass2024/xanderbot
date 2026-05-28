@@ -382,10 +382,11 @@ Route::middleware(['auth','verified','role:admin'])
         |--------------------------------------------------------------------------
         */
 
-        Route::resource('ads', AdController::class)->names('ads');
-
-        // Additional Ad routes
+        // Additional Ad routes (live + actions BEFORE resource {ad} wildcard — matches WABA)
 Route::prefix('ads')->name('ads.')->group(function () {
+
+    Route::get('live', [AdController::class, 'live'])
+        ->name('live');
 
     Route::post('bulk-status-update', [AdController::class, 'bulkStatusUpdate'])
         ->name('bulk-status-update');
@@ -401,15 +402,13 @@ Route::prefix('ads')->name('ads.')->group(function () {
 
     Route::post('{ad}/sync', [AdController::class, 'sync'])
         ->name('sync');
-Route::get('{ad}/preview', [AdController::class,'preview'])
-    ->name('preview');
+    Route::get('{ad}/preview', [AdController::class, 'preview'])
+        ->name('preview');
     Route::post('{ad}/publish', [AdController::class, 'publish'])
         ->name('publish');
-
-    /* LIVE DASHBOARD ROUTE */
-    Route::get('live', [AdController::class,'live'])
-        ->name('live');
 });
+
+        Route::resource('ads', AdController::class)->names('ads');
 
         // Ad Set-specific Ad creation
         Route::get('adsets/{adset}/ads/create', 

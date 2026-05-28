@@ -40,12 +40,23 @@ class AdController extends Controller
     {
         $cacheKey = 'meta_ad_insights_maps:'.md5($accountId);
 
-        return Cache::remember($cacheKey, now()->addSeconds(30), function () use ($accountId) {
+        try {
+            return Cache::remember($cacheKey, now()->addSeconds(30), function () use ($accountId) {
+                return [
+                    'lifetime' => $this->meta->getAdInsightsMap($accountId, 'maximum'),
+                    'today' => $this->meta->getAdInsightsMap($accountId, 'today'),
+                ];
+            });
+        } catch (Throwable $e) {
+            Log::warning('META_INSIGHTS_CACHE_FAILED', [
+                'error' => $e->getMessage(),
+            ]);
+
             return [
                 'lifetime' => $this->meta->getAdInsightsMap($accountId, 'maximum'),
                 'today' => $this->meta->getAdInsightsMap($accountId, 'today'),
             ];
-        });
+        }
     }
 
     protected function applyMetaInsightsToAds(iterable $ads, array $lifetime, array $today, bool $enforceBudget = true): void
@@ -1218,51 +1229,87 @@ public function publish(Ad $ad): RedirectResponse
 }
 public function live(): JsonResponse
 {
+    $refreshedAt = now()->toIso8601String();
+    $metaSynced = false;
+    $warning = null;
+
     try {
         $ads = $this->adsMetricsQuery()->get();
-        $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, true, false);
-        $metrics = $this->buildAdsMetrics($ads);
-
-        return response()
-            ->json([
-                'metrics' => $metrics,
-                'ads' => $ads->map(fn (Ad $ad) => $this->formatAdForLiveJson($ad))->values(),
-                'refreshed_at' => now()->toIso8601String(),
-                'meta_synced' => $metaSynced,
-            ])
-            ->header('Cache-Control', 'no-store, no-cache, must-revalidate');
     } catch (Throwable $e) {
-        Log::error('ADS_LIVE_ENDPOINT_FAILED', [
-            'error' => $e->getMessage(),
-        ]);
+        Log::error('ADS_LIVE_QUERY_FAILED', ['error' => $e->getMessage()]);
 
-        try {
-            $ads = $this->adsMetricsQuery()->get();
-            $metrics = $this->buildAdsMetrics($ads);
+        return $this->liveJsonResponse([], [
+            'total_ads' => 0,
+            'active_ads' => 0,
+            'total_spend' => 0,
+            'total_clicks' => 0,
+        ], $refreshedAt, false, 'Database metrics unavailable.');
+    }
 
-            return response()->json([
-                'metrics' => $metrics,
-                'ads' => $ads->map(fn (Ad $ad) => $this->formatAdForLiveJson($ad))->values(),
-                'refreshed_at' => now()->toIso8601String(),
-                'meta_synced' => false,
-                'warning' => 'Showing saved metrics. Meta sync will retry automatically.',
-            ]);
-        } catch (Throwable $fallbackError) {
-            return response()->json([
-                'metrics' => [
-                    'total_ads' => 0,
-                    'active_ads' => 0,
-                    'total_spend' => 0,
-                    'total_clicks' => 0,
-                ],
-                'ads' => [],
-                'refreshed_at' => now()->toIso8601String(),
-                'meta_synced' => false,
-                'error' => 'Live refresh unavailable.',
-            ], 500);
+    try {
+        $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, true, false);
+        if (! $metaSynced) {
+            $warning = 'using saved metrics';
         }
+    } catch (Throwable $e) {
+        Log::warning('ADS_LIVE_META_HYDRATE_FAILED', ['error' => $e->getMessage()]);
+        $warning = 'using saved metrics';
+    }
+
+    try {
+        $metrics = $this->buildAdsMetrics($ads);
+        $adRows = $ads->map(fn (Ad $ad) => $this->formatAdForLiveJson($ad))->values()->all();
+
+        return $this->liveJsonResponse($adRows, $metrics, $refreshedAt, $metaSynced, $warning);
+    } catch (Throwable $e) {
+        Log::error('ADS_LIVE_FORMAT_FAILED', ['error' => $e->getMessage()]);
+
+        return $this->liveJsonResponse(
+            $ads->map(function (Ad $ad) {
+                return [
+                    'id' => $ad->id,
+                    'status' => $ad->status,
+                    'impressions' => (int) ($ad->impressions ?? 0),
+                    'clicks' => (int) ($ad->clicks ?? 0),
+                    'ctr' => (float) ($ad->ctr ?? 0),
+                    'spend' => (float) ($ad->spend ?? 0),
+                    'daily_spend' => (float) ($ad->daily_spend ?? 0),
+                ];
+            })->values()->all(),
+            $this->buildAdsMetrics($ads),
+            $refreshedAt,
+            false,
+            'using saved metrics'
+        );
     }
 }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $ads
+     * @param  array<string, mixed>  $metrics
+     */
+    protected function liveJsonResponse(
+        array $ads,
+        array $metrics,
+        string $refreshedAt,
+        bool $metaSynced,
+        ?string $warning = null
+    ): JsonResponse {
+        $payload = [
+            'metrics' => $metrics,
+            'ads' => $ads,
+            'refreshed_at' => $refreshedAt,
+            'meta_synced' => $metaSynced,
+        ];
+
+        if ($warning) {
+            $payload['warning'] = $warning;
+        }
+
+        return response()
+            ->json($payload)
+            ->header('Cache-Control', 'no-store, no-cache, must-revalidate');
+    }
 
     /**
      * Meta subcode 1815520: invalid/missing link for LINK_CLICKS, LANDING_PAGE_VIEWS, etc.

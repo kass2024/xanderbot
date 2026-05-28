@@ -402,12 +402,14 @@ async function refreshAdsDashboard(){
             throw new Error('Live endpoint returned non-JSON response');
         }
 
-        if(!response.ok && (!data || !Array.isArray(data.ads))){
+        if(!response.ok){
             throw new Error((data && data.error) || 'Live refresh failed');
         }
 
         if(!data || !Array.isArray(data.ads)){
-            throw new Error('Live refresh returned invalid payload');
+            data = data || {};
+            data.ads = [];
+            data.metrics = data.metrics || {};
         }
 
         const metrics = data.metrics || {};
@@ -450,13 +452,9 @@ async function refreshAdsDashboard(){
     catch(e){
 
         console.warn('Live dashboard update failed', e);
-        if(e && e.name === 'AbortError'){
-            setLiveStatus(true, null, 'refresh slow — showing last saved metrics');
-        } else if(response && response.ok){
-            setLiveStatus(true, null, 'partial update — showing saved metrics');
-        } else {
-            setLiveStatus(false);
-        }
+        setLiveStatus(true, null, (e && e.name === 'AbortError')
+            ? 'refresh slow — showing last saved metrics'
+            : 'using saved metrics — will retry');
 
     }
     finally {
