@@ -356,29 +356,104 @@ protected function handleError($response, $endpoint, $payload = [])
      */
     public function getConnectedInstagramUserId(string $pageId): ?string
     {
+        return $this->resolveInstagramUserId($pageId);
+    }
+
+    /**
+     * Instagram actor id for ad creatives — Page lookup, then env fallback.
+     */
+    public function resolveInstagramUserId(string $pageId): ?string
+    {
         $pageId = trim($pageId);
-        if ($pageId === '') {
-            return null;
-        }
+        if ($pageId !== '') {
+            foreach (['connected_instagram_account{id}', 'instagram_business_account{id}'] as $fields) {
+                try {
+                    $res = $this->get($pageId, ['fields' => $fields]);
+                    $key = str_contains($fields, 'connected') ? 'connected_instagram_account' : 'instagram_business_account';
+                    $account = $res[$key] ?? null;
 
-        try {
-            $res = $this->get($pageId, [
-                'fields' => 'connected_instagram_account',
-            ]);
-
-            $account = $res['connected_instagram_account'] ?? null;
-
-            if (is_array($account) && ! empty($account['id'])) {
-                return (string) $account['id'];
+                    if (is_array($account) && ! empty($account['id'])) {
+                        return (string) $account['id'];
+                    }
+                } catch (Exception $e) {
+                    Log::warning('META_PAGE_INSTAGRAM_LOOKUP_FAILED', [
+                        'page_id' => $pageId,
+                        'fields' => $fields,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
-        } catch (Exception $e) {
-            Log::warning('META_PAGE_INSTAGRAM_LOOKUP_FAILED', [
-                'page_id' => $pageId,
-                'error' => $e->getMessage(),
-            ]);
         }
 
-        return null;
+        $fromEnv = trim((string) config('services.meta.instagram_user_id', ''));
+
+        return $fromEnv !== '' ? $fromEnv : null;
+    }
+
+    /**
+     * Force Facebook + Instagram placements (required for reliable IG delivery with link ads).
+     *
+     * @param  array<string, mixed>  $targeting
+     * @return array<string, mixed>
+     */
+    public function applyFacebookInstagramPlacements(array $targeting): array
+    {
+        $platforms = $targeting['publisher_platforms'] ?? [];
+
+        if (! is_array($platforms)) {
+            $platforms = [];
+        }
+
+        $merged = array_values(array_unique(array_merge($platforms, ['facebook', 'instagram'])));
+
+        $targeting['publisher_platforms'] = $merged;
+
+        return $this->enrichPlacementTargeting($targeting);
+    }
+
+    /**
+     * Patch a live Meta ad set so Instagram is included in publisher_platforms.
+     */
+    public function ensureAdSetTargetsInstagram(string $adsetMetaId): bool
+    {
+        $meta = $this->getAdSet($adsetMetaId);
+        $targeting = $meta['targeting'] ?? [];
+
+        if (is_string($targeting)) {
+            $decoded = json_decode($targeting, true);
+            $targeting = is_array($decoded) ? $decoded : [];
+        }
+
+        if (! is_array($targeting)) {
+            $targeting = [];
+        }
+
+        $platforms = $targeting['publisher_platforms'] ?? [];
+
+        if (is_array($platforms) && in_array('instagram', $platforms, true)) {
+            return false;
+        }
+
+        $patched = $this->applyFacebookInstagramPlacements($targeting);
+
+        $this->updateAdSet($adsetMetaId, [
+            'targeting' => json_encode($patched, JSON_THROW_ON_ERROR),
+        ]);
+
+        return true;
+    }
+
+    /**
+     * Swap an ad's creative on Meta (new creative must include instagram_user_id for IG).
+     */
+    public function attachCreativeToAd(string $adId, string $creativeId): array
+    {
+        return $this->updateAd($adId, [
+            'creative' => json_encode(
+                ['creative_id' => (string) $creativeId],
+                JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+            ),
+        ]);
     }
 
     /*
@@ -612,6 +687,15 @@ protected function buildTargeting(array $targeting): array
         }
 
         return $this->enrichPlacementTargeting($targeting);
+    }
+
+    /**
+     * @param  array<string, mixed>  $targeting
+     * @return array<string, mixed>
+     */
+    public function targetingWithFacebookAndInstagram(array $targeting): array
+    {
+        return $this->applyFacebookInstagramPlacements($targeting);
     }
 
    /*

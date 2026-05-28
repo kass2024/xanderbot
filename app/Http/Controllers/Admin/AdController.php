@@ -7,6 +7,7 @@ use App\Models\Ad;
 use App\Models\AdAccount;
 use App\Models\AdSet;
 use App\Models\Creative;
+use App\Services\InstagramDeliveryService;
 use App\Services\MetaAdsService;
 use App\Support\AdBudgetGuard;
 
@@ -28,9 +29,12 @@ class AdController extends Controller
 {
     protected MetaAdsService $meta;
 
-    public function __construct(MetaAdsService $meta)
+    protected InstagramDeliveryService $instagramDelivery;
+
+    public function __construct(MetaAdsService $meta, InstagramDeliveryService $instagramDelivery)
     {
         $this->meta = $meta;
+        $this->instagramDelivery = $instagramDelivery;
     }
 
     protected function resolveMetaAccountId(): ?string
@@ -1111,6 +1115,54 @@ public function duplicate(Ad $ad): RedirectResponse
 
     return back()->with('success','Ad duplicated.');
 }
+/**
+ * Patch ad set placements + swap in an Instagram-enabled creative on Meta.
+ */
+public function enableInstagram(Ad $ad): RedirectResponse
+{
+    try {
+        $this->instagramDelivery->repairAd($ad, true);
+
+        return back()->with(
+            'success',
+            'Instagram delivery enabled for this ad. IG impressions may take a few hours to show in the Platforms column.'
+        );
+    } catch (Throwable $e) {
+        Log::error('AD_ENABLE_INSTAGRAM_FAILED', [
+            'ad_id' => $ad->id,
+            'error' => $e->getMessage(),
+        ]);
+
+        return back()->withErrors([
+            'enable_instagram' => $e->getMessage(),
+        ]);
+    }
+}
+
+/**
+ * Enable Instagram on all existing campaigns (ad sets), creatives, and ads on Meta.
+ */
+public function enableInstagramAll(): RedirectResponse
+{
+    try {
+        $stats = $this->instagramDelivery->repairAll();
+
+        if ($stats['ads']['updated'] === 0 && $stats['errors'] !== []) {
+            return back()->withErrors([
+                'enable_instagram' => implode(' | ', array_slice($stats['errors'], 0, 3)),
+            ]);
+        }
+
+        return back()->with('success', $this->instagramDelivery->summaryMessage($stats));
+    } catch (Throwable $e) {
+        Log::error('AD_ENABLE_INSTAGRAM_ALL_FAILED', ['error' => $e->getMessage()]);
+
+        return back()->withErrors([
+            'enable_instagram' => $e->getMessage(),
+        ]);
+    }
+}
+
 public function sync(Ad $ad): RedirectResponse
 {
     if (!$ad->meta_ad_id) {
@@ -1404,23 +1456,12 @@ public function publish(Ad $ad): RedirectResponse
         AdSet $adset
     ): array {
         $strategies = [];
+        $urls = $this->meta->landingUrlCandidates((string) ($creative->destination_url ?? ''));
 
-        $strategies[] = ['label' => 'creative_id', 'payload' => $payload];
-
-        foreach ($this->meta->landingUrlCandidates((string) ($creative->destination_url ?? '')) as $url) {
-            $strategies[] = [
-                'label' => 'inline_spec:'.$url,
-                'payload' => array_merge($payload, [
-                    'creative' => [
-                        'spec' => $this->buildInlineLinkCreativeSpec($creative, $adset, $url),
-                    ],
-                ]),
-            ];
-        }
-
-        foreach ($this->meta->landingUrlCandidates((string) ($creative->destination_url ?? '')) as $url) {
+        // Prefer IG-enabled creatives first (plain creative_id often delivers Facebook-only).
+        foreach ($urls as $url) {
             try {
-                $newId = $this->recreateMetaCreativeForAd($accountId, $creative, $adset, $url);
+                $newId = $this->instagramDelivery->createInstagramCreativeOnMeta($accountId, $creative, $adset, $url);
                 $strategies[] = [
                     'label' => 'fresh_creative:'.$url,
                     'payload' => array_merge($payload, [
@@ -1434,6 +1475,19 @@ public function publish(Ad $ad): RedirectResponse
                 ]);
             }
         }
+
+        foreach ($urls as $url) {
+            $strategies[] = [
+                'label' => 'inline_spec:'.$url,
+                'payload' => array_merge($payload, [
+                    'creative' => [
+                        'spec' => $this->instagramDelivery->buildInlineLinkCreativeSpec($creative, $adset, $url),
+                    ],
+                ]),
+            ];
+        }
+
+        $strategies[] = ['label' => 'creative_id', 'payload' => $payload];
 
         $lastError = null;
 
@@ -1454,100 +1508,6 @@ public function publish(Ad $ad): RedirectResponse
         }
 
         throw $lastError ?? new Exception('Meta ad creation failed.');
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function buildInlineLinkCreativeSpec(Creative $creative, AdSet $adset, string $landingUrl): array
-    {
-        $stored = is_array($creative->json_payload) ? $creative->json_payload : [];
-        $spec = is_array($stored['object_story_spec'] ?? null) ? $stored['object_story_spec'] : [];
-        $linkData = is_array($spec['link_data'] ?? null) ? $spec['link_data'] : [];
-
-        $pageId = (string) ($spec['page_id'] ?? config('services.meta.page_id', ''));
-
-        if ($pageId === '' && ! empty($adset->meta_id)) {
-            $metaAdSet = $this->meta->getAdSet((string) $adset->meta_id);
-            $po = $metaAdSet['promoted_object'] ?? null;
-            if (is_array($po) && ! empty($po['page_id'])) {
-                $pageId = (string) $po['page_id'];
-            }
-        }
-
-        $linkData['link'] = $landingUrl;
-        $linkData['message'] = $this->sanitizeLinkMessage(
-            (string) ($linkData['message'] ?? $creative->body ?? '')
-        );
-        $linkData['name'] = $linkData['name'] ?? ($creative->headline ?? $creative->name);
-
-        if (empty($linkData['image_hash']) && ! empty($creative->image_hash)) {
-            $linkData['image_hash'] = $creative->image_hash;
-        }
-
-        $ctaType = $creative->call_to_action ?: 'LEARN_MORE';
-        $linkData['call_to_action'] = [
-            'type' => $ctaType,
-            'value' => ['link' => $landingUrl],
-        ];
-
-        $objectStorySpec = [
-            'page_id' => $pageId,
-            'link_data' => $linkData,
-        ];
-
-        if (empty($spec['instagram_user_id'])) {
-            $ig = $this->meta->getConnectedInstagramUserId($pageId);
-            if (! empty($ig)) {
-                $objectStorySpec['instagram_user_id'] = $ig;
-            }
-        }
-
-        return [
-            'name' => (string) ($creative->name ?? 'Ad Creative'),
-            'object_story_spec' => $objectStorySpec,
-        ];
-    }
-
-    private function sanitizeLinkMessage(string $message): string
-    {
-        $message = trim($message);
-        $message = preg_replace('/\s*Destination\s+URL\s*\r?\n.*$/is', '', $message) ?? $message;
-
-        return trim($message);
-    }
-
-    /**
-     * Recreate a Meta ad creative from our stored payload, for ad creation fallback.
-     */
-    private function recreateMetaCreativeForAd(
-        string $accountId,
-        Creative $creative,
-        AdSet $adset,
-        ?string $landingUrl = null
-    ): string {
-        $url = $landingUrl ?? $this->meta->normalizeLandingUrlForMeta((string) ($creative->destination_url ?? ''), false);
-
-        $creativePayload = [
-            'name' => (string) ($creative->name ?? 'Creative').' '.now()->format('YmdHis'),
-            'object_story_spec' => $this->buildInlineLinkCreativeSpec($creative, $adset, $url)['object_story_spec'],
-        ];
-
-        $created = $this->meta->createCreative($accountId, $creativePayload);
-
-        if (empty($created['id'])) {
-            throw new Exception('Meta creative recreation failed.');
-        }
-
-        $newId = (string) $created['id'];
-
-        $creative->update([
-            'meta_id' => $newId,
-            'destination_url' => $url,
-            'json_payload' => $creativePayload,
-        ]);
-
-        return $newId;
     }
 
     private function extractMetaSubcode(Throwable $e): ?int

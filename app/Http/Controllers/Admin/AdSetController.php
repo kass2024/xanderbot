@@ -315,6 +315,9 @@ if (!empty($data['languages'])) {
                     $data['publisher_platforms'];
 
                 $targeting = $this->meta->enrichPlacementsForTargeting($targeting);
+            } else {
+                // Automatic in UI = explicit FB + IG on Meta (link ads need IG in placements + creative)
+                $targeting = $this->meta->targetingWithFacebookAndInstagram($targeting);
             }
 
             /*
@@ -804,6 +807,8 @@ public function update(Request $request, AdSet $adset)
             if (! empty($targeting['publisher_platforms'])) {
                 $targeting = $this->meta->enrichPlacementsForTargeting($targeting);
             }
+        } else {
+            $targeting = $this->meta->targetingWithFacebookAndInstagram($targeting);
         }
 
         /*

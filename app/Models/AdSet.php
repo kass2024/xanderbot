@@ -281,7 +281,7 @@ public function getBudgetFormattedAttribute(): string
     public function placementTargetLabels(): array
     {
         if ($this->usesAutomaticPlacements()) {
-            return ['Auto (FB + IG)'];
+            return ['Facebook + Instagram'];
         }
 
         $labels = [];

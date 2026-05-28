@@ -36,6 +36,12 @@
         >
             Ad sets
         </a>
+        <form method="POST" action="{{ route('admin.ads.enable-instagram-all') }}" class="m-0" onsubmit="return confirm('Update ALL existing campaigns, ad sets, creatives, and ads on Meta for Instagram delivery?');">
+            @csrf
+            <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-2.5 text-sm font-semibold text-fuchsia-900 shadow-sm transition hover:bg-fuchsia-100">
+                Enable IG (all existing)
+            </button>
+        </form>
         <a
             href="{{ route('admin.ads.create') }}"
             class="inline-flex items-center justify-center gap-2 rounded-xl bg-xander-navy px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-xander-secondary"
@@ -203,6 +209,14 @@ ALERTS
             <span class="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/15" title="Facebook has impressions; Instagram targeted but none yet">
                 FB only · IG pending
             </span>
+            @if($ad->meta_ad_id)
+            <form method="POST" action="{{ route('admin.ads.enable-instagram', $ad) }}" class="m-0">
+                @csrf
+                <button type="submit" class="text-[11px] font-semibold text-fuchsia-700 underline decoration-fuchsia-300 underline-offset-2 hover:text-fuchsia-900">
+                    Enable IG
+                </button>
+            </form>
+            @endif
         @elseif($fbImp > 0)
             <span class="inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-600/15">
                 Facebook only
@@ -268,6 +282,12 @@ ALERTS
                 @method('PATCH')
                 <button type="submit" class="w-full rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs font-semibold text-amber-900 ring-1 ring-amber-600/15 transition hover:bg-amber-100">Pause</button>
             </form>
+        @endif
+        @if($ad->meta_ad_id)
+        <form method="POST" action="{{ route('admin.ads.enable-instagram', $ad) }}" class="m-0">
+            @csrf
+            <button type="submit" class="w-full rounded-lg bg-fuchsia-50 px-2.5 py-1.5 text-xs font-semibold text-fuchsia-800 ring-1 ring-fuchsia-600/15 transition hover:bg-fuchsia-100">Enable IG</button>
+        </form>
         @endif
         <form method="POST" action="{{ route('admin.ads.sync',$ad->id) }}" class="m-0">
             @csrf

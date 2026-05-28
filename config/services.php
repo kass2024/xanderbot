@@ -45,6 +45,8 @@ return [
     'token' => env('META_SYSTEM_USER_TOKEN'),
     'ad_account_id' => env('META_AD_ACCOUNT_ID'),
      'page_id' => env('META_PAGE_ID'),
+    /** Fallback when Page → IG lookup fails; find in Meta Business Suite → Instagram account ID */
+    'instagram_user_id' => env('META_INSTAGRAM_USER_ID'),
     'refresh_before_days' => env('META_TOKEN_REFRESH_BEFORE_DAYS', 5),
 
         /*
