@@ -1408,7 +1408,17 @@ public function getAds(?string $accountId = null): array
 public function getAd(string $adId): array
 {
     return $this->get($adId, [
-        'fields' => 'id,name,status,effective_status,adset_id,campaign_id'
+        'fields' => 'id,name,status,effective_status,adset_id,campaign_id',
+    ]);
+}
+
+/**
+ * Fetch ad with creative object_story_spec (for IG delivery verification).
+ */
+public function getAdWithCreativeSpec(string $adId): array
+{
+    return $this->get($adId, [
+        'fields' => 'id,name,status,effective_status,adset_id,creative{id,name,object_story_spec}',
     ]);
 }
 /*

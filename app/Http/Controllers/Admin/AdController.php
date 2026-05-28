@@ -94,54 +94,11 @@ class AdController extends Controller
      */
     protected function buildPlacementPayloadForAd(Ad $ad): array
     {
-        $ad->loadMissing('adSet');
         $delivery = is_array($ad->getAttribute('placement_delivery'))
             ? $ad->getAttribute('placement_delivery')
             : [];
 
-        $ig = $delivery['instagram'] ?? [];
-        $fb = $delivery['facebook'] ?? [];
-        $igImpressions = (int) ($ig['impressions'] ?? 0);
-        $fbImpressions = (int) ($fb['impressions'] ?? 0);
-
-        return [
-            'targets' => $ad->adSet?->placementTargetLabels() ?? [],
-            'targets_instagram' => $ad->adSet?->targetsInstagram() ?? false,
-            'delivers_instagram' => $igImpressions > 0,
-            'delivers_facebook' => $fbImpressions > 0,
-            'instagram_impressions' => $igImpressions,
-            'instagram_clicks' => (int) ($ig['clicks'] ?? 0),
-            'facebook_impressions' => $fbImpressions,
-            'facebook_clicks' => (int) ($fb['clicks'] ?? 0),
-            'summary' => $this->formatPlacementSummary($ad->adSet, $delivery),
-        ];
-    }
-
-    /**
-     * @param  array<string, array<string, mixed>>  $delivery
-     */
-    protected function formatPlacementSummary(?AdSet $adSet, array $delivery): string
-    {
-        $igImpressions = (int) ($delivery['instagram']['impressions'] ?? 0);
-        $fbImpressions = (int) ($delivery['facebook']['impressions'] ?? 0);
-
-        if ($igImpressions > 0 && $fbImpressions > 0) {
-            return 'Delivering on Facebook & Instagram';
-        }
-
-        if ($igImpressions > 0) {
-            return 'Delivering on Instagram';
-        }
-
-        if ($fbImpressions > 0) {
-            return 'Facebook only (no IG impressions yet)';
-        }
-
-        if ($adSet?->targetsInstagram()) {
-            return 'IG targeted — no impressions yet';
-        }
-
-        return 'No platform data from Meta';
+        return $this->instagramDelivery->buildPlacementPayloadForAd($ad, $delivery);
     }
 
     protected function parseInsightMetric(array $row, string $key): float
@@ -295,6 +252,7 @@ class AdController extends Controller
             Schema::hasColumn('ads', 'daily_spend_anchor') ? 'daily_spend_anchor' : null,
             Schema::hasColumn('ads', 'pause_reason') ? 'pause_reason' : null,
             Schema::hasColumn('ads', 'spend_date') ? 'spend_date' : null,
+            Schema::hasColumn('ads', 'instagram_enabled_at') ? 'instagram_enabled_at' : null,
             'created_at',
         ]));
     }
@@ -366,7 +324,12 @@ class AdController extends Controller
 
         $freshMap = $allAds->keyBy('id');
         $ads->setCollection(
-            $ads->getCollection()->map(fn (Ad $ad) => $freshMap->get($ad->id, $ad))
+            $ads->getCollection()->map(function (Ad $ad) use ($freshMap) {
+                $ad = $freshMap->get($ad->id, $ad);
+                $ad->setAttribute('placement', $this->buildPlacementPayloadForAd($ad));
+
+                return $ad;
+            })
         );
 
         $metrics = $this->buildAdsMetrics($allAds);
@@ -829,16 +792,45 @@ $ad = Ad::create([
         ]);
     }
 
+    $placementDelivery = [];
+    if (! empty($ad->meta_ad_id)) {
+        try {
+            $accountId = $this->resolveMetaAccountId();
+            if ($accountId) {
+                $map = $this->meta->getAdPlacementInsightsMap($accountId, 'maximum');
+                $placementDelivery = $map[(string) $ad->meta_ad_id] ?? [];
+            }
+        } catch (Throwable $e) {
+            Log::warning('PREVIEW_PLACEMENT_FETCH_FAILED', ['error' => $e->getMessage()]);
+        }
+    }
+
+    $igDelivery = $this->instagramDelivery->auditAdDelivery($ad, $placementDelivery, true);
+
+    $placementRows = [];
+    foreach (['facebook', 'instagram', 'messenger', 'audience_network'] as $platform) {
+        if (! isset($placementDelivery[$platform])) {
+            continue;
+        }
+        $row = $placementDelivery[$platform];
+        $placementRows[] = [
+            'placement' => ucfirst(str_replace('_', ' ', $platform)),
+            'platform_key' => $platform,
+            'impressions' => (int) ($row['impressions'] ?? 0),
+            'clicks' => (int) ($row['clicks'] ?? 0),
+            'spend' => (float) ($row['spend'] ?? 0),
+        ];
+    }
+    if ($placementRows === [] && $placements !== []) {
+        $placementRows = array_values($placements);
+    }
+
     return view('admin.ads.preview', [
-
         'ad' => $ad,
-
         'audience' => $audience,
-
         'devices' => array_values($devices),
-
-        'placements' => array_values($placements)
-
+        'placements' => $placementRows,
+        'igDelivery' => $igDelivery,
     ]);
 }
 /*
@@ -1122,10 +1114,11 @@ public function enableInstagram(Ad $ad): RedirectResponse
 {
     try {
         $this->instagramDelivery->repairAd($ad, true);
+        $this->instagramDelivery->clearInsightsCaches($this->resolveMetaAccountId());
 
         return back()->with(
             'success',
-            'Instagram delivery enabled for this ad. IG impressions may take a few hours to show in the Platforms column.'
+            'Instagram enabled on Meta for this ad. Platforms column should show “IG enabled” — IG live impressions can take a few hours.'
         );
     } catch (Throwable $e) {
         Log::error('AD_ENABLE_INSTAGRAM_FAILED', [
@@ -1146,6 +1139,7 @@ public function enableInstagramAll(): RedirectResponse
 {
     try {
         $stats = $this->instagramDelivery->repairAll();
+        $this->instagramDelivery->clearInsightsCaches($this->resolveMetaAccountId());
 
         if ($stats['ads']['updated'] === 0 && $stats['errors'] !== []) {
             return back()->withErrors([

@@ -187,48 +187,7 @@ ALERTS
 
 {{-- PLATFORMS (configured targets + Meta delivery by publisher_platform) --}}
 <td class="min-w-[9rem] px-4 py-3 align-top lg:px-5" id="platforms-{{ $ad->id }}">
-@php
-    $placementDelivery = is_array($ad->placement_delivery ?? null) ? $ad->placement_delivery : [];
-    $igImp = (int) ($placementDelivery['instagram']['impressions'] ?? 0);
-    $fbImp = (int) ($placementDelivery['facebook']['impressions'] ?? 0);
-    $igClicks = (int) ($placementDelivery['instagram']['clicks'] ?? 0);
-    $targetLabels = $ad->adSet?->placementTargetLabels() ?? [];
-    $targetsIg = $ad->adSet?->targetsInstagram() ?? false;
-@endphp
-    <div class="space-y-1">
-        @if(count($targetLabels))
-            <div class="text-[11px] text-slate-500" title="Ad set placement settings">
-                Target: {{ implode(', ', $targetLabels) }}
-            </div>
-        @endif
-        @if($igImp > 0)
-            <span class="inline-flex rounded-md bg-fuchsia-50 px-2 py-0.5 text-xs font-semibold text-fuchsia-800 ring-1 ring-fuchsia-600/15" title="{{ number_format($igImp) }} impressions, {{ number_format($igClicks) }} clicks on Instagram">
-                IG live · {{ number_format($igImp) }} impr.
-            </span>
-        @elseif($fbImp > 0 && $targetsIg)
-            <span class="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/15" title="Facebook has impressions; Instagram targeted but none yet">
-                FB only · IG pending
-            </span>
-            @if($ad->meta_ad_id)
-            <form method="POST" action="{{ route('admin.ads.enable-instagram', $ad) }}" class="m-0">
-                @csrf
-                <button type="submit" class="text-[11px] font-semibold text-fuchsia-700 underline decoration-fuchsia-300 underline-offset-2 hover:text-fuchsia-900">
-                    Enable IG
-                </button>
-            </form>
-            @endif
-        @elseif($fbImp > 0)
-            <span class="inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-600/15">
-                Facebook only
-            </span>
-        @elseif($targetsIg)
-            <span class="inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-400/20">
-                IG targeted · no data yet
-            </span>
-        @else
-            <span class="text-xs text-slate-400">—</span>
-        @endif
-    </div>
+    @include('admin.ads._platforms_cell', ['ad' => $ad, 'placement' => $ad->placement ?? []])
 </td>
 
 
@@ -405,7 +364,9 @@ function renderCtr(ctr){
     return '<span class="font-semibold ctr-value ' + color + '">' + value.toFixed(2) + '%</span>';
 }
 
-function renderPlatforms(placement){
+const enableIgUrl = (adId) => @json(route('admin.ads.enable-instagram', ['ad' => 0])).replace('/0/', '/' + adId + '/');
+
+function renderPlatforms(placement, adId){
     if(!placement){
         return '<span class="text-xs text-slate-400">—</span>';
     }
@@ -415,16 +376,23 @@ function renderPlatforms(placement){
         ? '<div class="text-[11px] text-slate-500">Target: ' + targets.join(', ') + '</div>'
         : '';
 
+    const status = placement.status || '';
     const igImp = Number(placement.instagram_impressions || 0);
     const fbImp = Number(placement.facebook_impressions || 0);
     const igClicks = Number(placement.instagram_clicks || 0);
     const targetsIg = !!placement.targets_instagram;
 
     let badge = '<span class="text-xs text-slate-400">—</span>';
+    let sub = '';
 
-    if(igImp > 0){
+    if(status === 'live' || igImp > 0){
         badge = '<span class="inline-flex rounded-md bg-fuchsia-50 px-2 py-0.5 text-xs font-semibold text-fuchsia-800 ring-1 ring-fuchsia-600/15" title="' + igImp.toLocaleString() + ' impressions, ' + igClicks.toLocaleString() + ' clicks on Instagram">IG live · ' + igImp.toLocaleString() + ' impr.</span>';
-    } else if(fbImp > 0 && targetsIg){
+    } else if(status === 'enabled'){
+        badge = '<span class="inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15">IG enabled</span>';
+        if(fbImp > 0){
+            sub = '<span class="text-[11px] text-slate-500">FB ' + fbImp.toLocaleString() + ' impr. · IG impressions pending</span>';
+        }
+    } else if(status === 'pending' || (fbImp > 0 && targetsIg)){
         badge = '<span class="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/15">FB only · IG pending</span>';
     } else if(fbImp > 0){
         badge = '<span class="inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-600/15">Facebook only</span>';
@@ -432,7 +400,12 @@ function renderPlatforms(placement){
         badge = '<span class="inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-400/20">IG targeted · no data yet</span>';
     }
 
-    return '<div class="space-y-1">' + targetLine + badge + '</div>';
+    const showEnable = (status === 'pending' || status === 'not_configured') && adId;
+    const enableBtn = showEnable
+        ? '<form method="POST" action="' + enableIgUrl(adId) + '" class="m-0"><input type="hidden" name="_token" value="{{ csrf_token() }}"><button type="submit" class="text-[11px] font-semibold text-fuchsia-700 underline">Enable IG</button></form>'
+        : '';
+
+    return '<div class="space-y-1">' + targetLine + badge + sub + enableBtn + '</div>';
 }
 
 async function refreshAdsDashboard(){
@@ -508,7 +481,7 @@ async function refreshAdsDashboard(){
             }
 
             if(plt && ad.placement){
-                plt.innerHTML = renderPlatforms(ad.placement);
+                plt.innerHTML = renderPlatforms(ad.placement, ad.id);
             }
 
         });

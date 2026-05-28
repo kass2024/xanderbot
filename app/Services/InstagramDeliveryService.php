@@ -270,6 +270,8 @@ class InstagramDeliveryService
             throw new Exception($response['error']['message'] ?? 'Meta failed to attach Instagram creative.');
         }
 
+        $this->markAdInstagramEnabled($ad);
+
         Log::info('IG_REPAIR_AD_OK', [
             'ad_id' => $ad->id,
             'meta_ad_id' => $ad->meta_ad_id,
@@ -409,5 +411,190 @@ class InstagramDeliveryService
         $platforms = $targeting['publisher_platforms'] ?? [];
 
         return ! is_array($platforms) || ! in_array('instagram', $platforms, true);
+    }
+
+    public function clearInsightsCaches(?string $accountId = null): void
+    {
+        $accountId = $accountId ?? config('services.meta.ad_account_id');
+        if (! $accountId) {
+            return;
+        }
+
+        $hash = md5((string) $accountId);
+        \Illuminate\Support\Facades\Cache::forget('meta_ad_insights_maps:'.$hash);
+        \Illuminate\Support\Facades\Cache::forget('meta_ad_placement_maps:'.$hash);
+    }
+
+    public function markAdInstagramEnabled(Ad $ad): void
+    {
+        if (\Illuminate\Support\Facades\Schema::hasColumn('ads', 'instagram_enabled_at')) {
+            $ad->update(['instagram_enabled_at' => now()]);
+            $ad->instagram_enabled_at = now();
+        }
+    }
+
+    public function creativeHasInstagramActor(Creative $creative): bool
+    {
+        $stored = is_array($creative->json_payload) ? $creative->json_payload : [];
+        $spec = is_array($stored['object_story_spec'] ?? null) ? $stored['object_story_spec'] : [];
+
+        return trim((string) ($spec['instagram_user_id'] ?? '')) !== '';
+    }
+
+    /**
+     * Full Instagram delivery audit for UI + insight page.
+     *
+     * @param  array<string, array<string, mixed>>  $placementDelivery
+     * @return array<string, mixed>
+     */
+    public function auditAdDelivery(Ad $ad, array $placementDelivery = [], bool $verifyMetaLive = false): array
+    {
+        $ad->loadMissing(['creative', 'adSet.campaign.adAccount']);
+
+        $ig = $placementDelivery['instagram'] ?? [];
+        $fb = $placementDelivery['facebook'] ?? [];
+        $igImpressions = (int) ($ig['impressions'] ?? 0);
+        $fbImpressions = (int) ($fb['impressions'] ?? 0);
+        $igClicks = (int) ($ig['clicks'] ?? 0);
+        $fbClicks = (int) ($fb['clicks'] ?? 0);
+        $igSpend = (float) ($ig['spend'] ?? 0);
+        $fbSpend = (float) ($fb['spend'] ?? 0);
+
+        $targetsIg = $ad->adSet?->targetsInstagram() ?? false;
+        $creativeHasIg = $ad->creative ? $this->creativeHasInstagramActor($ad->creative) : false;
+        $enabledAt = $ad->instagram_enabled_at ?? null;
+        $configuredOnMeta = $targetsIg && $creativeHasIg;
+
+        $metaCreativeHasIg = null;
+        $metaCreativeError = null;
+
+        if ($verifyMetaLive && ! empty($ad->meta_ad_id)) {
+            try {
+                $live = $this->meta->getAdWithCreativeSpec((string) $ad->meta_ad_id);
+                $oss = $live['creative']['object_story_spec'] ?? null;
+                if (is_string($oss)) {
+                    $decoded = json_decode($oss, true);
+                    $oss = is_array($decoded) ? $decoded : [];
+                }
+                $metaCreativeHasIg = is_array($oss) && ! empty($oss['instagram_user_id']);
+            } catch (Throwable $e) {
+                $metaCreativeError = $e->getMessage();
+            }
+        }
+
+        $status = 'not_configured';
+        $statusLabel = 'Not configured for Instagram';
+
+        if ($igImpressions > 0) {
+            $status = 'live';
+            $statusLabel = 'Delivering on Instagram ('.number_format($igImpressions).' impressions)';
+        } elseif ($configuredOnMeta || $enabledAt || $metaCreativeHasIg === true) {
+            $status = 'enabled';
+            $statusLabel = 'IG enabled on Meta — waiting for impressions';
+        } elseif ($targetsIg && $fbImpressions > 0) {
+            $status = 'pending';
+            $statusLabel = 'IG targeted — click Enable IG or wait for delivery';
+        }
+
+        return [
+            'status' => $status,
+            'status_label' => $statusLabel,
+            'targets' => $ad->adSet?->placementTargetLabels() ?? [],
+            'targets_instagram' => $targetsIg,
+            'configured_adset' => $targetsIg,
+            'configured_creative' => $creativeHasIg,
+            'meta_creative_has_ig' => $metaCreativeHasIg,
+            'meta_creative_error' => $metaCreativeError,
+            'instagram_enabled_at' => $enabledAt?->toIso8601String(),
+            'instagram_user_id' => $this->extractInstagramUserId($ad->creative),
+            'delivers_instagram' => $igImpressions > 0,
+            'delivers_facebook' => $fbImpressions > 0,
+            'instagram_impressions' => $igImpressions,
+            'instagram_clicks' => $igClicks,
+            'instagram_spend' => $igSpend,
+            'facebook_impressions' => $fbImpressions,
+            'facebook_clicks' => $fbClicks,
+            'facebook_spend' => $fbSpend,
+            'checks' => [
+                ['ok' => $targetsIg, 'label' => 'Ad set targets Instagram'],
+                ['ok' => $creativeHasIg, 'label' => 'Creative has instagram_user_id (local)'],
+                ['ok' => $metaCreativeHasIg === true, 'label' => 'Meta ad creative has instagram_user_id', 'note' => $metaCreativeHasIg === null ? 'Could not verify live' : null],
+                ['ok' => $igImpressions > 0, 'label' => 'Instagram impressions from Meta insights'],
+            ],
+            'curl_commands' => $this->buildCurlDebugCommands($ad),
+        ];
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $placementDelivery
+     * @return array<string, mixed>
+     */
+    public function buildPlacementPayloadForAd(Ad $ad, array $placementDelivery = []): array
+    {
+        $audit = $this->auditAdDelivery($ad, $placementDelivery);
+
+        return array_merge($audit, [
+            'summary' => $audit['status_label'],
+        ]);
+    }
+
+    protected function extractInstagramUserId(?Creative $creative): ?string
+    {
+        if (! $creative) {
+            return null;
+        }
+
+        $stored = is_array($creative->json_payload) ? $creative->json_payload : [];
+        $spec = is_array($stored['object_story_spec'] ?? null) ? $stored['object_story_spec'] : [];
+        $id = trim((string) ($spec['instagram_user_id'] ?? ''));
+
+        return $id !== '' ? $id : null;
+    }
+
+    /**
+     * @return list<array{title: string, command: string}>
+     */
+    protected function buildCurlDebugCommands(Ad $ad): array
+    {
+        $version = config('services.meta.graph_version', 'v19.0');
+        $base = 'https://graph.facebook.com/'.$version;
+        $token = config('services.meta.token', 'YOUR_ACCESS_TOKEN');
+        $accountId = config('services.meta.ad_account_id', 'act_ACCOUNT');
+        if (! str_starts_with((string) $accountId, 'act_')) {
+            $accountId = 'act_'.$accountId;
+        }
+
+        $commands = [];
+
+        if ($ad->meta_ad_id) {
+            $commands[] = [
+                'title' => 'Ad + creative (check instagram_user_id on Meta)',
+                'command' => 'curl -s "'.$base.'/'.$ad->meta_ad_id.'?fields=id,name,status,creative{id,object_story_spec}&access_token='.$token.'" | jq',
+            ];
+            $commands[] = [
+                'title' => 'This ad — impressions by platform (IG vs FB)',
+                'command' => 'curl -s "'.$base.'/'.$ad->meta_ad_id.'/insights?fields=impressions,clicks,spend&breakdowns=publisher_platform&date_preset=maximum&access_token='.$token.'" | jq',
+            ];
+        }
+
+        if ($ad->adSet?->meta_id) {
+            $commands[] = [
+                'title' => 'Ad set targeting (publisher_platforms)',
+                'command' => 'curl -s "'.$base.'/'.$ad->adSet->meta_id.'?fields=id,name,targeting&access_token='.$token.'" | jq',
+            ];
+        }
+
+        $commands[] = [
+            'title' => 'Ad account Instagram accounts',
+            'command' => 'curl -s "'.$base.'/'.$accountId.'/instagram_accounts?fields=id,username&access_token='.$token.'" | jq',
+        ];
+
+        $pageId = config('services.meta.page_id', 'PAGE_ID');
+        $commands[] = [
+            'title' => 'Page linked Instagram',
+            'command' => 'curl -s "'.$base.'/'.$pageId.'?fields=connected_instagram_account{id,username}&access_token='.$token.'" | jq',
+        ];
+
+        return $commands;
     }
 }

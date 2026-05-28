@@ -70,6 +70,7 @@ protected $fillable = [
     'daily_spend_anchor',
     'pause_reason',
     'spend_date',
+    'instagram_enabled_at',
 
     /* Metrics */
     'impressions',
@@ -100,9 +101,11 @@ protected $fillable = [
     | Casts
     |--------------------------------------------------------------------------
     */
-protected $casts = [
+    protected $casts = [
 
-    'daily_budget' => 'float',
+        'instagram_enabled_at' => 'datetime',
+
+        'daily_budget' => 'float',
     'daily_spend' => 'float',
     'daily_spend_anchor' => 'float',
     'spend_date' => 'date',
