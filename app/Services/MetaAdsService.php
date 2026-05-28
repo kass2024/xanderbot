@@ -1165,6 +1165,7 @@ public function getAdSet(string $adsetId): array
             'billing_event',
             'promoted_object',
             'targeting',
+            'destination_type',
         ]),
     ]);
 }
@@ -1484,6 +1485,48 @@ public function getAdInsightsMap(?string $accountId = null, string $preset = 'ma
 
     return $map;
 }
+
+/**
+ * Ad-level insights split by publisher_platform (facebook, instagram, …).
+ *
+ * @return array<string, array<string, array{impressions: int, clicks: int, spend: float}>>
+ */
+public function getAdPlacementInsightsMap(?string $accountId = null, string $preset = 'maximum'): array
+{
+    $accountId = $this->formatAccount($accountId ?? config('services.meta.ad_account_id'));
+
+    $response = $this->get("{$accountId}/insights", [
+        'level' => 'ad',
+        'breakdowns' => 'publisher_platform',
+        'fields' => implode(',', ['ad_id', 'impressions', 'clicks', 'spend']),
+        'date_preset' => $preset,
+        'limit' => 500,
+    ]);
+
+    $map = [];
+
+    foreach ($response['data'] ?? [] as $row) {
+        $adId = (string) ($row['ad_id'] ?? '');
+        $platform = strtolower((string) ($row['publisher_platform'] ?? 'unknown'));
+
+        if ($adId === '') {
+            continue;
+        }
+
+        if (! isset($map[$adId])) {
+            $map[$adId] = [];
+        }
+
+        $map[$adId][$platform] = [
+            'impressions' => (int) ($row['impressions'] ?? 0),
+            'clicks' => (int) ($row['clicks'] ?? 0),
+            'spend' => (float) ($row['spend'] ?? 0),
+        ];
+    }
+
+    return $map;
+}
+
 public function getAccountStatus($accountId)
 {
     $accountId = str_starts_with($accountId, 'act_')

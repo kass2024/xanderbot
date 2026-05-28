@@ -86,7 +86,7 @@ ALERTS
 {{-- TABLE: horizontal scroll + sticky Actions column --}}
 <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/5">
     <div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
-        <table class="w-full min-w-[1040px] border-collapse text-left text-sm text-slate-700">
+        <table class="w-full min-w-[1180px] border-collapse text-left text-sm text-slate-700">
 
 <thead>
 <tr class="border-b border-slate-200 bg-slate-50/95 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -94,6 +94,7 @@ ALERTS
 <th class="whitespace-nowrap px-4 py-3 lg:px-5">Creative</th>
 <th class="min-w-[8rem] whitespace-nowrap px-4 py-3 lg:px-5">Ad set</th>
 <th class="whitespace-nowrap px-4 py-3 lg:px-5">Delivery</th>
+<th class="min-w-[9rem] whitespace-nowrap px-4 py-3 lg:px-5">Platforms</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Impr.</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Clicks</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">CTR</th>
@@ -178,6 +179,44 @@ ALERTS
 
 </td>
 
+{{-- PLATFORMS (configured targets + Meta delivery by publisher_platform) --}}
+<td class="min-w-[9rem] px-4 py-3 align-top lg:px-5" id="platforms-{{ $ad->id }}">
+@php
+    $placementDelivery = is_array($ad->placement_delivery ?? null) ? $ad->placement_delivery : [];
+    $igImp = (int) ($placementDelivery['instagram']['impressions'] ?? 0);
+    $fbImp = (int) ($placementDelivery['facebook']['impressions'] ?? 0);
+    $igClicks = (int) ($placementDelivery['instagram']['clicks'] ?? 0);
+    $targetLabels = $ad->adSet?->placementTargetLabels() ?? [];
+    $targetsIg = $ad->adSet?->targetsInstagram() ?? false;
+@endphp
+    <div class="space-y-1">
+        @if(count($targetLabels))
+            <div class="text-[11px] text-slate-500" title="Ad set placement settings">
+                Target: {{ implode(', ', $targetLabels) }}
+            </div>
+        @endif
+        @if($igImp > 0)
+            <span class="inline-flex rounded-md bg-fuchsia-50 px-2 py-0.5 text-xs font-semibold text-fuchsia-800 ring-1 ring-fuchsia-600/15" title="{{ number_format($igImp) }} impressions, {{ number_format($igClicks) }} clicks on Instagram">
+                IG live · {{ number_format($igImp) }} impr.
+            </span>
+        @elseif($fbImp > 0 && $targetsIg)
+            <span class="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/15" title="Facebook has impressions; Instagram targeted but none yet">
+                FB only · IG pending
+            </span>
+        @elseif($fbImp > 0)
+            <span class="inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-600/15">
+                Facebook only
+            </span>
+        @elseif($targetsIg)
+            <span class="inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-400/20">
+                IG targeted · no data yet
+            </span>
+        @else
+            <span class="text-xs text-slate-400">—</span>
+        @endif
+    </div>
+</td>
+
 
 {{-- IMPRESSIONS --}}
 <td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" id="imp-{{ $ad->id }}">{{ number_format($ad->impressions ?? 0) }}</td>
@@ -251,7 +290,7 @@ ALERTS
 @empty
 
 <tr>
-<td colspan="12" class="px-4 py-16 text-center text-slate-500">
+<td colspan="13" class="px-4 py-16 text-center text-slate-500">
 <div class="flex flex-col items-center gap-4">
 <p class="text-lg font-medium text-slate-700">No ads yet</p>
 <a href="{{ route('admin.ads.create') }}" class="inline-flex rounded-xl bg-xander-navy px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-xander-secondary">Create your first ad</a>
@@ -346,6 +385,36 @@ function renderCtr(ctr){
     return '<span class="font-semibold ctr-value ' + color + '">' + value.toFixed(2) + '%</span>';
 }
 
+function renderPlatforms(placement){
+    if(!placement){
+        return '<span class="text-xs text-slate-400">—</span>';
+    }
+
+    const targets = Array.isArray(placement.targets) ? placement.targets : [];
+    const targetLine = targets.length
+        ? '<div class="text-[11px] text-slate-500">Target: ' + targets.join(', ') + '</div>'
+        : '';
+
+    const igImp = Number(placement.instagram_impressions || 0);
+    const fbImp = Number(placement.facebook_impressions || 0);
+    const igClicks = Number(placement.instagram_clicks || 0);
+    const targetsIg = !!placement.targets_instagram;
+
+    let badge = '<span class="text-xs text-slate-400">—</span>';
+
+    if(igImp > 0){
+        badge = '<span class="inline-flex rounded-md bg-fuchsia-50 px-2 py-0.5 text-xs font-semibold text-fuchsia-800 ring-1 ring-fuchsia-600/15" title="' + igImp.toLocaleString() + ' impressions, ' + igClicks.toLocaleString() + ' clicks on Instagram">IG live · ' + igImp.toLocaleString() + ' impr.</span>';
+    } else if(fbImp > 0 && targetsIg){
+        badge = '<span class="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/15">FB only · IG pending</span>';
+    } else if(fbImp > 0){
+        badge = '<span class="inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-600/15">Facebook only</span>';
+    } else if(targetsIg){
+        badge = '<span class="inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-400/20">IG targeted · no data yet</span>';
+    }
+
+    return '<div class="space-y-1">' + targetLine + badge + '</div>';
+}
+
 async function refreshAdsDashboard(){
 
     if(running) return;
@@ -406,6 +475,7 @@ async function refreshAdsDashboard(){
             const spn = document.getElementById('spend-'+ad.id);
             const tdy = document.getElementById('today-'+ad.id);
             const sts = document.getElementById('status-'+ad.id);
+            const plt = document.getElementById('platforms-'+ad.id);
 
             if(imp) imp.textContent = number(ad.impressions);
             if(clk) clk.textContent = number(ad.clicks);
@@ -415,6 +485,10 @@ async function refreshAdsDashboard(){
 
             if(sts){
                 sts.innerHTML = renderStatus(ad.status);
+            }
+
+            if(plt && ad.placement){
+                plt.innerHTML = renderPlatforms(ad.placement);
             }
 
         });

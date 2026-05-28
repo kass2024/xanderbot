@@ -247,6 +247,57 @@ public function getBudgetFormattedAttribute(): string
         ];
     }
 
+    /**
+     * Publisher platforms from Meta targeting (facebook, instagram, etc.).
+     *
+     * @return list<string>
+     */
+    public function publisherPlatforms(): array
+    {
+        $platforms = $this->targeting['publisher_platforms'] ?? [];
+
+        return is_array($platforms) ? array_values($platforms) : [];
+    }
+
+    public function usesAutomaticPlacements(): bool
+    {
+        return $this->publisherPlatforms() === [];
+    }
+
+    public function targetsInstagram(): bool
+    {
+        if ($this->usesAutomaticPlacements()) {
+            return true;
+        }
+
+        return in_array('instagram', $this->publisherPlatforms(), true);
+    }
+
+    /**
+     * Human labels for configured placements (not delivery proof — see Meta insights).
+     *
+     * @return list<string>
+     */
+    public function placementTargetLabels(): array
+    {
+        if ($this->usesAutomaticPlacements()) {
+            return ['Auto (FB + IG)'];
+        }
+
+        $labels = [];
+        foreach ($this->publisherPlatforms() as $platform) {
+            $labels[] = match ($platform) {
+                'facebook' => 'Facebook',
+                'instagram' => 'Instagram',
+                'messenger' => 'Messenger',
+                'audience_network' => 'Audience Network',
+                default => ucfirst(str_replace('_', ' ', $platform)),
+            };
+        }
+
+        return $labels;
+    }
+
 
     /*
     |--------------------------------------------------------------------------

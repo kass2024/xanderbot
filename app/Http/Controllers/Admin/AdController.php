@@ -61,6 +61,85 @@ class AdController extends Controller
         });
     }
 
+    /**
+     * @return array<string, array<string, array{impressions: int, clicks: int, spend: float}>>
+     */
+    protected function placementInsightsMap(string $accountId): array
+    {
+        $cacheKey = 'meta_ad_placement_maps:'.md5($accountId);
+
+        return Cache::remember($cacheKey, now()->addSeconds(60), function () use ($accountId) {
+            return $this->meta->getAdPlacementInsightsMap($accountId, 'maximum');
+        });
+    }
+
+    /**
+     * @param  array<string, array<string, array{impressions: int, clicks: int, spend: float}>>  $placementMap
+     */
+    protected function applyPlacementDeliveryToAds(iterable $ads, array $placementMap): void
+    {
+        foreach ($ads as $ad) {
+            $metaId = (string) ($ad->meta_ad_id ?? '');
+            $delivery = $metaId !== '' ? ($placementMap[$metaId] ?? []) : [];
+            $ad->setAttribute('placement_delivery', $delivery);
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function buildPlacementPayloadForAd(Ad $ad): array
+    {
+        $ad->loadMissing('adSet');
+        $delivery = is_array($ad->getAttribute('placement_delivery'))
+            ? $ad->getAttribute('placement_delivery')
+            : [];
+
+        $ig = $delivery['instagram'] ?? [];
+        $fb = $delivery['facebook'] ?? [];
+        $igImpressions = (int) ($ig['impressions'] ?? 0);
+        $fbImpressions = (int) ($fb['impressions'] ?? 0);
+
+        return [
+            'targets' => $ad->adSet?->placementTargetLabels() ?? [],
+            'targets_instagram' => $ad->adSet?->targetsInstagram() ?? false,
+            'delivers_instagram' => $igImpressions > 0,
+            'delivers_facebook' => $fbImpressions > 0,
+            'instagram_impressions' => $igImpressions,
+            'instagram_clicks' => (int) ($ig['clicks'] ?? 0),
+            'facebook_impressions' => $fbImpressions,
+            'facebook_clicks' => (int) ($fb['clicks'] ?? 0),
+            'summary' => $this->formatPlacementSummary($ad->adSet, $delivery),
+        ];
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $delivery
+     */
+    protected function formatPlacementSummary(?AdSet $adSet, array $delivery): string
+    {
+        $igImpressions = (int) ($delivery['instagram']['impressions'] ?? 0);
+        $fbImpressions = (int) ($delivery['facebook']['impressions'] ?? 0);
+
+        if ($igImpressions > 0 && $fbImpressions > 0) {
+            return 'Delivering on Facebook & Instagram';
+        }
+
+        if ($igImpressions > 0) {
+            return 'Delivering on Instagram';
+        }
+
+        if ($fbImpressions > 0) {
+            return 'Facebook only (no IG impressions yet)';
+        }
+
+        if ($adSet?->targetsInstagram()) {
+            return 'IG targeted — no impressions yet';
+        }
+
+        return 'No platform data from Meta';
+    }
+
     protected function parseInsightMetric(array $row, string $key): float
     {
         return (float) ($row[$key] ?? 0);
@@ -176,6 +255,7 @@ class AdController extends Controller
     protected function adsMetricsQuery()
     {
         return Ad::query()
+            ->with(['adSet:id,name,campaign_id,targeting'])
             ->select($this->adsSelectColumns())
             ->latest();
     }
@@ -185,7 +265,7 @@ class AdController extends Controller
         return Ad::query()
             ->with([
                 'creative:id,name,image_url',
-                'adSet:id,name,campaign_id',
+                'adSet:id,name,campaign_id,targeting',
                 'adSet.campaign:id,name,ad_account_id',
                 'adSet.campaign.adAccount:id,name,meta_id',
             ])
@@ -231,7 +311,7 @@ class AdController extends Controller
 
     protected function formatAdForLiveJson(Ad $ad): array
     {
-        return [
+        return array_merge([
             'id' => $ad->id,
             'name' => $ad->name,
             'adset_id' => $ad->adset_id,
@@ -245,7 +325,26 @@ class AdController extends Controller
             'daily_spend' => $ad->displayDailySpend(),
             'daily_budget' => (float) ($ad->daily_budget ?? 0),
             'pause_reason' => $ad->pause_reason ?? null,
-        ];
+        ], [
+            'placement' => $this->buildPlacementPayloadForAd($ad),
+        ]);
+    }
+
+    protected function hydratePlacementDeliveryFromMeta(iterable $ads): void
+    {
+        $accountId = $this->resolveMetaAccountId();
+
+        if (! $accountId) {
+            return;
+        }
+
+        try {
+            $this->applyPlacementDeliveryToAds($ads, $this->placementInsightsMap($accountId));
+        } catch (Throwable $e) {
+            Log::warning('ADS_PLACEMENT_INSIGHTS_FAILED', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /*
@@ -259,6 +358,7 @@ class AdController extends Controller
 
         $allAds = $this->adsMetricsQuery()->get();
         $this->hydrateLiveMetricsFromMeta($allAds, false, true);
+        $this->hydratePlacementDeliveryFromMeta($allAds);
 
         $freshMap = $allAds->keyBy('id');
         $ads->setCollection(
@@ -1206,6 +1306,8 @@ public function publish(Ad $ad): RedirectResponse
             if (! $metaSynced) {
                 $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, false, true);
             }
+
+            $this->hydratePlacementDeliveryFromMeta($ads);
 
             $metrics = $this->buildAdsMetrics($ads);
 
