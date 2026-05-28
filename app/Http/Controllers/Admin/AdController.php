@@ -53,11 +53,54 @@ class AdController extends Controller
     /**
      * @return array{lifetime: array<string, array<string, mixed>>, today: array<string, array<string, mixed>>}
      */
+    /**
+     * Cache is optional — file cache permission errors must not break Resync or live refresh.
+     */
+    protected function cacheRemember(string $key, int $seconds, callable $callback): mixed
+    {
+        try {
+            return Cache::remember($key, now()->addSeconds($seconds), $callback);
+        } catch (Throwable $e) {
+            Log::warning('CACHE_REMEMBER_FAILED', [
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $callback();
+        }
+    }
+
+    protected function cacheGet(string $key, mixed $default = null): mixed
+    {
+        try {
+            return Cache::get($key, $default);
+        } catch (Throwable $e) {
+            Log::warning('CACHE_GET_FAILED', [
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $default;
+        }
+    }
+
+    protected function cacheForget(string $key): void
+    {
+        try {
+            Cache::forget($key);
+        } catch (Throwable $e) {
+            Log::warning('CACHE_FORGET_FAILED', [
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
     protected function metaInsightsMaps(string $accountId): array
     {
         $cacheKey = 'meta_ad_insights_maps:'.md5($accountId);
 
-        return Cache::remember($cacheKey, now()->addSeconds(30), function () use ($accountId) {
+        return $this->cacheRemember($cacheKey, 30, function () use ($accountId) {
             return [
                 'lifetime' => $this->meta->getAdInsightsMap($accountId, 'maximum'),
                 'today' => $this->meta->getAdInsightsMap($accountId, 'today'),
@@ -72,9 +115,58 @@ class AdController extends Controller
     {
         $cacheKey = 'meta_ad_placement_maps:'.md5($accountId.':'.$preset);
 
-        return Cache::remember($cacheKey, now()->addSeconds(60), function () use ($accountId, $preset) {
+        return $this->cacheRemember($cacheKey, 60, function () use ($accountId, $preset) {
             return $this->meta->getAdPlacementInsightsMap($accountId, $preset);
         });
+    }
+
+    /**
+     * Lifetime placement (all Meta ad ids) + today's Instagram on the active Meta ad id.
+     *
+     * @param  array<string, array<string, array{impressions: int, clicks: int, spend: float}>>  $maximumMap
+     * @param  array<string, array<string, array{impressions: int, clicks: int, spend: float}>>  $todayMap
+     * @return array<string, array{impressions: int, clicks: int, spend: float}>
+     */
+    protected function mergePlacementMapsForAd(Ad $ad, array $maximumMap, array $todayMap): array
+    {
+        $merged = $this->mergedPlacementDeliveryForAd($ad, $maximumMap);
+        $todayAll = $this->mergedPlacementDeliveryForAd($ad, $todayMap);
+        $currentId = (string) ($ad->meta_ad_id ?? '');
+        $todayCurrent = ($currentId !== '' && isset($todayMap[$currentId]) && is_array($todayMap[$currentId]))
+            ? $todayMap[$currentId]
+            : [];
+
+        foreach (['instagram', 'facebook'] as $platform) {
+            $candidates = [
+                $merged[$platform] ?? null,
+                $todayAll[$platform] ?? null,
+                $todayCurrent[$platform] ?? null,
+            ];
+
+            $impressions = 0;
+            $clicks = 0;
+            $spend = 0.0;
+
+            foreach ($candidates as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+
+                $impressions = max($impressions, (int) ($row['impressions'] ?? 0));
+                $clicks = max($clicks, (int) ($row['clicks'] ?? 0));
+                $spend = max($spend, (float) ($row['spend'] ?? 0));
+            }
+
+            if ($impressions > 0 || $clicks > 0 || $spend > 0.00001) {
+                $merged[$platform] = [
+                    'impressions' => $impressions,
+                    'clicks' => $clicks,
+                    'spend' => $spend,
+                ];
+            }
+        }
+
+        return $merged;
     }
 
     /**
@@ -521,9 +613,9 @@ class AdController extends Controller
         }
 
         foreach ($byAccount as $accountId => $group) {
-            Cache::forget('meta_ad_insights_maps:'.md5($accountId));
-            Cache::forget('meta_ad_placement_maps:'.md5($accountId.':maximum'));
-            Cache::forget('meta_ad_placement_maps:'.md5($accountId.':today'));
+            $this->cacheForget('meta_ad_insights_maps:'.md5($accountId));
+            $this->cacheForget('meta_ad_placement_maps:'.md5($accountId.':maximum'));
+            $this->cacheForget('meta_ad_placement_maps:'.md5($accountId.':today'));
 
             $maps = $this->metaInsightsMaps($accountId);
             $lifetime = $maps['lifetime'] ?? [];
@@ -562,6 +654,15 @@ class AdController extends Controller
                     'meta_ids' => $this->metaAdIdsForMetrics($ad),
                 ];
             }
+
+            try {
+                $this->hydratePlacementDeliveryFromMeta($group);
+            } catch (Throwable $e) {
+                Log::warning('ADS_RESYNC_PLACEMENT_FAILED', [
+                    'account_id' => $accountId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         return $stats;
@@ -585,7 +686,7 @@ class AdController extends Controller
             $cacheKey = 'meta_ad_insights_maps:'.md5($accountId);
 
             if ($cacheOnly) {
-                $maps = Cache::get($cacheKey);
+                $maps = $this->cacheGet($cacheKey);
 
                 if (! is_array($maps) || empty($maps['lifetime'])) {
                     return false;
@@ -713,7 +814,7 @@ class AdController extends Controller
 
     protected function hydratePlacementDeliveryFromMeta(iterable $ads): void
     {
-        $byAccountPreset = [];
+        $byAccount = [];
 
         foreach ($ads as $ad) {
             $accountId = $this->resolveMetaAccountIdForAd($ad);
@@ -722,27 +823,25 @@ class AdController extends Controller
                 continue;
             }
 
-            $preset = ($ad->created_at && $ad->created_at->greaterThan(now()->subDays(3)))
-                ? 'today'
-                : 'maximum';
-
-            $byAccountPreset[$accountId][$preset][] = $ad;
+            $byAccount[$accountId][] = $ad;
         }
 
-        foreach ($byAccountPreset as $accountId => $presets) {
-            foreach ($presets as $preset => $group) {
-                try {
-                    $this->applyPlacementDeliveryToAds(
-                        $group,
-                        $this->placementInsightsMap($accountId, $preset)
+        foreach ($byAccount as $accountId => $group) {
+            try {
+                $maximumMap = $this->placementInsightsMap($accountId, 'maximum');
+                $todayMap = $this->placementInsightsMap($accountId, 'today');
+
+                foreach ($group as $ad) {
+                    $ad->setAttribute(
+                        'placement_delivery',
+                        $this->mergePlacementMapsForAd($ad, $maximumMap, $todayMap)
                     );
-                } catch (Throwable $e) {
-                    Log::warning('ADS_PLACEMENT_INSIGHTS_FAILED', [
-                        'account_id' => $accountId,
-                        'preset' => $preset,
-                        'error' => $e->getMessage(),
-                    ]);
                 }
+            } catch (Throwable $e) {
+                Log::warning('ADS_PLACEMENT_INSIGHTS_FAILED', [
+                    'account_id' => $accountId,
+                    'error' => $e->getMessage(),
+                ]);
             }
         }
     }

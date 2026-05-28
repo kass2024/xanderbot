@@ -706,10 +706,10 @@ class InstagramDeliveryService
         $igImpressionsLifetime = (int) ($ig['impressions'] ?? 0);
         $igImpressionsRecent = (int) ($igRecent['impressions'] ?? 0);
         $igImpressions = max($igImpressionsLifetime, $igImpressionsRecent);
+        $igClicks = max((int) ($ig['clicks'] ?? 0), (int) ($igRecent['clicks'] ?? 0));
+        $igSpend = max((float) ($ig['spend'] ?? 0), (float) ($igRecent['spend'] ?? 0));
         $fbImpressions = (int) ($fb['impressions'] ?? 0);
-        $igClicks = (int) ($ig['clicks'] ?? 0);
         $fbClicks = (int) ($fb['clicks'] ?? 0);
-        $igSpend = (float) ($ig['spend'] ?? 0);
         $fbSpend = (float) ($fb['spend'] ?? 0);
         $an = $placementDelivery['audience_network'] ?? [];
         $anImpressions = (int) ($an['impressions'] ?? 0);
