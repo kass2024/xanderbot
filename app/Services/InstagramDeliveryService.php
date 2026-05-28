@@ -509,6 +509,9 @@ class InstagramDeliveryService
 
         $hash = md5((string) $accountId);
         \Illuminate\Support\Facades\Cache::forget('meta_ad_insights_maps:'.$hash);
+        foreach (['maximum', 'today', 'last_7d', 'last_3d'] as $preset) {
+            \Illuminate\Support\Facades\Cache::forget('meta_ad_placement_maps:'.md5($hash.':'.$preset));
+        }
         \Illuminate\Support\Facades\Cache::forget('meta_ad_placement_maps:'.$hash);
     }
 
@@ -544,11 +547,16 @@ class InstagramDeliveryService
         }
 
         $recentDelivery = [];
+        $recentPreset = 'last_7d';
+        if ($ad->created_at && $ad->created_at->greaterThan(now()->subDays(3))) {
+            $recentPreset = 'today';
+        }
+
         if ($verifyMetaLive && ! empty($ad->meta_ad_id)) {
             $accountId = $this->resolveAccountIdForAd($ad);
             if ($accountId) {
                 try {
-                    $recentMap = $this->meta->getAdPlacementInsightsMap($accountId, 'last_7d');
+                    $recentMap = $this->meta->getAdPlacementInsightsMap($accountId, $recentPreset);
                     $recentDelivery = $recentMap[(string) $ad->meta_ad_id] ?? [];
                 } catch (Throwable $e) {
                     Log::warning('IG_AUDIT_RECENT_PLACEMENT_FAILED', ['ad_id' => $ad->id, 'error' => $e->getMessage()]);
@@ -606,7 +614,10 @@ class InstagramDeliveryService
             $statusLabel = 'IG enabled on Meta — waiting for impressions';
             if ($igImpressionsRecent === 0 && $igImpressionsLifetime === 0) {
                 if ($anImpressions > 0 && $fbImpressions > 0) {
-                    $deliveryWarning = 'Lifetime: Audience Network + Facebook, Instagram 0. Ad sets are now FB+IG only. If last 7 days shows no rows, the ad had no recent delivery — IG will only appear on new spend (24–48h after change, or raise budget / unpause).';
+                    $deliveryWarning = 'Ad is new but Meta reports Audience Network + Facebook, Instagram 0. '
+                        .'Usually the ad set was created with Audience Network in manual placements, or spend started before enable-instagram. '
+                        .'Create a new ad set (Automatic placements) or run meta:enable-instagram --force-adsets. '
+                        .'Note: Meta last_7d excludes today — use the today breakdown for ads created today.';
                 } elseif ($anImpressions > 0) {
                     $deliveryWarning = 'Impressions are on Audience Network only. Run: php artisan meta:enable-instagram --force-adsets';
                 }
@@ -631,7 +642,8 @@ class InstagramDeliveryService
             'delivers_facebook' => $fbImpressions > 0,
             'instagram_impressions' => $igImpressions,
             'instagram_impressions_lifetime' => $igImpressionsLifetime,
-            'instagram_impressions_last_7d' => $igImpressionsRecent,
+            'instagram_impressions_recent' => $igImpressionsRecent,
+            'insights_recent_preset' => $recentPreset,
             'instagram_clicks' => $igClicks,
             'instagram_spend' => $igSpend,
             'facebook_impressions' => $fbImpressions,

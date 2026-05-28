@@ -311,14 +311,14 @@ if (!empty($data['languages'])) {
                     throw new Exception('Select at least one placement');
                 }
 
-                $targeting['publisher_platforms'] =
-                    $data['publisher_platforms'];
-
-                $targeting = $this->meta->enrichPlacementsForTargeting($targeting);
-            } else {
-                // Automatic in UI = explicit FB + IG on Meta (link ads need IG in placements + creative)
-                $targeting = $this->meta->targetingWithFacebookAndInstagram($targeting);
+                $targeting['publisher_platforms'] = array_values(array_diff(
+                    $data['publisher_platforms'],
+                    ['audience_network', 'messenger']
+                ));
             }
+
+            // Always FB + Instagram only (new ads must not include Audience Network).
+            $targeting = $this->meta->targetingWithFacebookAndInstagram($targeting);
 
             /*
             |--------------------------------------------------------------------------
@@ -800,16 +800,13 @@ public function update(Request $request, AdSet $adset)
         */
 
         if ($data['placement_type'] === 'manual') {
-
-            $targeting['publisher_platforms'] =
-                $data['publisher_platforms'] ?? [];
-
-            if (! empty($targeting['publisher_platforms'])) {
-                $targeting = $this->meta->enrichPlacementsForTargeting($targeting);
-            }
-        } else {
-            $targeting = $this->meta->targetingWithFacebookAndInstagram($targeting);
+            $targeting['publisher_platforms'] = array_values(array_diff(
+                $data['publisher_platforms'] ?? [],
+                ['audience_network', 'messenger']
+            ));
         }
+
+        $targeting = $this->meta->targetingWithFacebookAndInstagram($targeting);
 
         /*
         |--------------------------------------------------------------------------

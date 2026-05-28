@@ -68,12 +68,12 @@ class AdController extends Controller
     /**
      * @return array<string, array<string, array{impressions: int, clicks: int, spend: float}>>
      */
-    protected function placementInsightsMap(string $accountId): array
+    protected function placementInsightsMap(string $accountId, string $preset = 'maximum'): array
     {
-        $cacheKey = 'meta_ad_placement_maps:'.md5($accountId);
+        $cacheKey = 'meta_ad_placement_maps:'.md5($accountId.':'.$preset);
 
-        return Cache::remember($cacheKey, now()->addSeconds(60), function () use ($accountId) {
-            return $this->meta->getAdPlacementInsightsMap($accountId, 'maximum');
+        return Cache::remember($cacheKey, now()->addSeconds(60), function () use ($accountId, $preset) {
+            return $this->meta->getAdPlacementInsightsMap($accountId, $preset);
         });
     }
 
@@ -304,7 +304,7 @@ class AdController extends Controller
 
     protected function hydratePlacementDeliveryFromMeta(iterable $ads): void
     {
-        $byAccount = [];
+        $byAccountPreset = [];
 
         foreach ($ads as $ad) {
             $accountId = $this->resolveMetaAccountIdForAd($ad);
@@ -313,17 +313,27 @@ class AdController extends Controller
                 continue;
             }
 
-            $byAccount[$accountId][] = $ad;
+            $preset = ($ad->created_at && $ad->created_at->greaterThan(now()->subDays(3)))
+                ? 'today'
+                : 'maximum';
+
+            $byAccountPreset[$accountId][$preset][] = $ad;
         }
 
-        foreach ($byAccount as $accountId => $group) {
-            try {
-                $this->applyPlacementDeliveryToAds($group, $this->placementInsightsMap($accountId));
-            } catch (Throwable $e) {
-                Log::warning('ADS_PLACEMENT_INSIGHTS_FAILED', [
-                    'account_id' => $accountId,
-                    'error' => $e->getMessage(),
-                ]);
+        foreach ($byAccountPreset as $accountId => $presets) {
+            foreach ($presets as $preset => $group) {
+                try {
+                    $this->applyPlacementDeliveryToAds(
+                        $group,
+                        $this->placementInsightsMap($accountId, $preset)
+                    );
+                } catch (Throwable $e) {
+                    Log::warning('ADS_PLACEMENT_INSIGHTS_FAILED', [
+                        'account_id' => $accountId,
+                        'preset' => $preset,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
         }
     }

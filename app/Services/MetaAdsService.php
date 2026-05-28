@@ -880,7 +880,7 @@ protected function buildTargeting(array $targeting): array
         if (in_array('instagram', $platforms, true)) {
             $targeting['instagram_positions'] = array_values(array_unique(array_merge(
                 is_array($targeting['instagram_positions'] ?? null) ? $targeting['instagram_positions'] : [],
-                ['stream', 'story', 'reels', 'explore', 'profile_feed', 'ig_search']
+                ['stream', 'story', 'reels', 'explore', 'profile_feed']
             )));
         }
 
@@ -985,6 +985,8 @@ public function createAdSet(string $accountId, array $data): array
     */
 
     $targeting = $this->buildTargeting($targeting);
+
+    $targeting = $this->applyFacebookInstagramPlacements($targeting);
 
 /*
 |--------------------------------------------------------------------------

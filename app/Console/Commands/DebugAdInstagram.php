@@ -83,7 +83,8 @@ class DebugAdInstagram extends Command
             ['Creative has IG id (local)', ($audit['configured_creative'] ?? false) ? 'yes' : 'no'],
             ['Meta creative has IG id', $audit['meta_creative_has_ig'] === null ? 'unknown' : (($audit['meta_creative_has_ig'] ?? false) ? 'yes' : 'no')],
             ['IG impressions (max lifetime/7d)', number_format($audit['instagram_impressions'] ?? 0)],
-            ['IG impressions (last 7d)', number_format($audit['instagram_impressions_last_7d'] ?? 0)],
+            ['IG impressions (recent / '.($audit['insights_recent_preset'] ?? 'last_7d').')', number_format($audit['instagram_impressions_recent'] ?? 0)],
+            ['Ad created (local)', (string) ($ad->created_at ?? '—')],
             ['IG impressions (lifetime)', number_format($audit['instagram_impressions_lifetime'] ?? 0)],
             ['FB impressions', number_format($audit['facebook_impressions'] ?? 0)],
             ['Audience Network impr.', number_format($audit['audience_network_impressions'] ?? 0)],
@@ -183,9 +184,9 @@ class DebugAdInstagram extends Command
                 }
                 if (! $hasIgToday && ($audit['instagram_impressions'] ?? 0) === 0) {
                     $this->newLine();
-                    $this->comment('  → Config is correct (IG enabled). Platform breakdown is from past delivery (AN+FB).');
-                    $this->comment('  → last_7d = $0 means no rolling-week spend; "today" may match lifetime if all spend was earlier today.');
-                    $this->comment('  → After --force-adsets, only NEW impressions can show instagram — watch Ads Manager 24–48h or duplicate the ad set.');
+                    $this->comment('  → Config is correct (IG enabled). For ads created today, Meta last_7d often excludes today (shows $0).');
+                    $this->comment('  → If today shows audience_network: ad set likely included AN at create — new ad sets now force FB+IG only.');
+                    $this->comment('  → Duplicate ad set (Automatic) + new ad, or confirm live publisher_platforms above is facebook, instagram only.');
                 }
             } catch (Throwable $e) {
                 $this->error('  Insights: '.$e->getMessage());
