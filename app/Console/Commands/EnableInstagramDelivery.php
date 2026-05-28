@@ -9,7 +9,8 @@ use Throwable;
 class EnableInstagramDelivery extends Command
 {
     protected $signature = 'meta:enable-instagram
-                            {--dry-run : List counts only, do not call Meta}';
+                            {--dry-run : List counts only, do not call Meta}
+                            {--force-adsets : Re-apply FB+IG placements on Meta even when targeting looks correct}';
 
     protected $description = 'Update all existing campaigns, ad sets, creatives, and ads on Meta for Instagram delivery';
 
@@ -45,7 +46,8 @@ class EnableInstagramDelivery extends Command
         $this->line('Using Instagram ID '.$diag['instagram_user_id'].' ('.$diag['source'].')');
         $this->newLine();
 
-        $stats = $instagram->repairAll();
+        $forceAdSets = $this->option('force-adsets') || ! $this->option('dry-run');
+        $stats = $instagram->repairAll($forceAdSets);
         $backfilled = $instagram->backfillInstagramEnabledFlags();
 
         $this->info($instagram->summaryMessage($stats));

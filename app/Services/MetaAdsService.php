@@ -609,7 +609,7 @@ protected function handleError($response, $endpoint, $payload = [])
     /**
      * Patch a live Meta ad set so Instagram is included in publisher_platforms.
      */
-    public function ensureAdSetTargetsInstagram(string $adsetMetaId): bool
+    public function ensureAdSetTargetsInstagram(string $adsetMetaId, bool $force = false): bool
     {
         $meta = $this->getAdSet($adsetMetaId);
         $targeting = $meta['targeting'] ?? [];
@@ -623,17 +623,53 @@ protected function handleError($response, $endpoint, $payload = [])
             $targeting = [];
         }
 
-        if (! $this->targetingNeedsInstagramRepair($targeting)) {
+        $patched = $this->applyFacebookInstagramPlacements($targeting);
+
+        if (! $force && ! $this->targetingNeedsInstagramRepair($targeting) && $this->targetingEquivalent($targeting, $patched)) {
             return false;
         }
-
-        $patched = $this->applyFacebookInstagramPlacements($targeting);
 
         $this->updateAdSet($adsetMetaId, [
             'targeting' => json_encode($patched, JSON_THROW_ON_ERROR),
         ]);
 
         return true;
+    }
+
+    /**
+     * Compare targeting payloads (ignore key order).
+     *
+     * @param  array<string, mixed>  $a
+     * @param  array<string, mixed>  $b
+     */
+    public function targetingEquivalent(array $a, array $b): bool
+    {
+        return json_encode($this->normalizeTargetingForCompare($a))
+            === json_encode($this->normalizeTargetingForCompare($b));
+    }
+
+    /**
+     * @param  array<string, mixed>  $targeting
+     * @return array<string, mixed>
+     */
+    protected function normalizeTargetingForCompare(array $targeting): array
+    {
+        $copy = $targeting;
+        ksort($copy);
+
+        if (isset($copy['publisher_platforms']) && is_array($copy['publisher_platforms'])) {
+            $copy['publisher_platforms'] = array_values(array_unique($copy['publisher_platforms']));
+            sort($copy['publisher_platforms']);
+        }
+
+        foreach (['facebook_positions', 'instagram_positions', 'device_platforms'] as $key) {
+            if (isset($copy[$key]) && is_array($copy[$key])) {
+                $copy[$key] = array_values(array_unique($copy[$key]));
+                sort($copy[$key]);
+            }
+        }
+
+        return $copy;
     }
 
     /**
@@ -842,11 +878,10 @@ protected function buildTargeting(array $targeting): array
         }
 
         if (in_array('instagram', $platforms, true)) {
-            $targeting['instagram_positions'] = $targeting['instagram_positions'] ?? [
-                'stream',
-                'story',
-                'reels',
-            ];
+            $targeting['instagram_positions'] = array_values(array_unique(array_merge(
+                is_array($targeting['instagram_positions'] ?? null) ? $targeting['instagram_positions'] : [],
+                ['stream', 'story', 'reels', 'explore', 'profile_feed', 'ig_search']
+            )));
         }
 
         if (in_array('messenger', $platforms, true)) {

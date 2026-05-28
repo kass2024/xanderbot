@@ -28,9 +28,11 @@ class InstagramDeliveryService
      *     errors: list<string>
      * }
      */
-    public function repairAll(): array
+    public function repairAll(bool $forceAdSets = true): array
     {
         $this->assertInstagramConfigured();
+
+        $placementMap = $this->loadAccountPlacementMap();
 
         $stats = [
             'campaigns' => Campaign::query()->whereNotNull('meta_id')->count(),
@@ -44,9 +46,10 @@ class InstagramDeliveryService
             ->whereNotNull('meta_id')
             ->with('campaign.adAccount')
             ->orderBy('id')
-            ->each(function (AdSet $adSet) use (&$stats) {
+            ->each(function (AdSet $adSet) use (&$stats, $forceAdSets, $placementMap) {
                 try {
-                    if ($this->repairAdSet($adSet)) {
+                    $force = $forceAdSets || $this->adSetLacksInstagramDelivery($adSet, $placementMap);
+                    if ($this->repairAdSet($adSet, $force)) {
                         $stats['adsets']['updated']++;
                     } else {
                         $stats['adsets']['skipped']++;
@@ -185,13 +188,13 @@ class InstagramDeliveryService
     /**
      * Update Meta + local ad set targeting to include Instagram.
      */
-    public function repairAdSet(AdSet $adSet): bool
+    public function repairAdSet(AdSet $adSet, bool $forceMeta = false): bool
     {
         if (empty($adSet->meta_id)) {
             return false;
         }
 
-        $metaChanged = $this->meta->ensureAdSetTargetsInstagram((string) $adSet->meta_id);
+        $metaChanged = $this->meta->ensureAdSetTargetsInstagram((string) $adSet->meta_id, $forceMeta);
 
         $localTargeting = is_array($adSet->targeting) ? $adSet->targeting : [];
         $patched = $this->meta->targetingWithFacebookAndInstagram($localTargeting);
@@ -284,7 +287,7 @@ class InstagramDeliveryService
         $pageId = (string) ($spec['page_id'] ?? config('services.meta.page_id', ''));
         $this->assertInstagramConfigured($pageId);
 
-        $this->repairAdSet($ad->adSet);
+        $this->repairAdSet($ad->adSet, true);
 
         if ($recreateCreative) {
             $this->repairCreative($ad->creative, true);
@@ -446,6 +449,57 @@ class InstagramDeliveryService
         return ! is_array($platforms) || ! in_array('instagram', $platforms, true);
     }
 
+    protected function resolveAccountIdForAd(Ad $ad): ?string
+    {
+        $ad->loadMissing('adSet.campaign.adAccount');
+
+        return $this->resolveAccountIdForCreative($ad->creative ?? new Creative(), $ad->adSet);
+    }
+
+    /**
+     * @return array<string, array<string, array{impressions: int, clicks: int, spend: float}>>
+     */
+    protected function loadAccountPlacementMap(): array
+    {
+        $raw = AdAccount::query()->whereNotNull('meta_id')->value('meta_id')
+            ?? config('services.meta.ad_account_id');
+
+        if (! $raw) {
+            return [];
+        }
+
+        try {
+            return $this->meta->getAdPlacementInsightsMap((string) $raw, 'maximum');
+        } catch (Throwable $e) {
+            Log::warning('IG_REPAIR_PLACEMENT_MAP_FAILED', ['error' => $e->getMessage()]);
+
+            return [];
+        }
+    }
+
+    /**
+     * @param  array<string, array<string, array{impressions: int, clicks: int, spend: float}>>  $placementMap
+     */
+    protected function adSetLacksInstagramDelivery(AdSet $adSet, array $placementMap): bool
+    {
+        $adSet->loadMissing(['ads']);
+
+        foreach ($adSet->ads as $ad) {
+            if (empty($ad->meta_ad_id)) {
+                continue;
+            }
+
+            $delivery = $placementMap[(string) $ad->meta_ad_id] ?? [];
+            $igImpressions = (int) ($delivery['instagram']['impressions'] ?? 0);
+
+            if ($igImpressions > 0) {
+                return false;
+            }
+        }
+
+        return $adSet->ads->whereNotNull('meta_ad_id')->isNotEmpty();
+    }
+
     public function clearInsightsCaches(?string $accountId = null): void
     {
         $accountId = $accountId ?? config('services.meta.ad_account_id');
@@ -489,9 +543,25 @@ class InstagramDeliveryService
             $ad->load('creative');
         }
 
+        $recentDelivery = [];
+        if ($verifyMetaLive && ! empty($ad->meta_ad_id)) {
+            $accountId = $this->resolveAccountIdForAd($ad);
+            if ($accountId) {
+                try {
+                    $recentMap = $this->meta->getAdPlacementInsightsMap($accountId, 'last_7d');
+                    $recentDelivery = $recentMap[(string) $ad->meta_ad_id] ?? [];
+                } catch (Throwable $e) {
+                    Log::warning('IG_AUDIT_RECENT_PLACEMENT_FAILED', ['ad_id' => $ad->id, 'error' => $e->getMessage()]);
+                }
+            }
+        }
+
         $ig = $placementDelivery['instagram'] ?? [];
+        $igRecent = $recentDelivery['instagram'] ?? [];
         $fb = $placementDelivery['facebook'] ?? [];
-        $igImpressions = (int) ($ig['impressions'] ?? 0);
+        $igImpressionsLifetime = (int) ($ig['impressions'] ?? 0);
+        $igImpressionsRecent = (int) ($igRecent['impressions'] ?? 0);
+        $igImpressions = max($igImpressionsLifetime, $igImpressionsRecent);
         $fbImpressions = (int) ($fb['impressions'] ?? 0);
         $igClicks = (int) ($ig['clicks'] ?? 0);
         $fbClicks = (int) ($fb['clicks'] ?? 0);
@@ -534,9 +604,12 @@ class InstagramDeliveryService
         } elseif ($markedEnabled || $configuredOnMeta || $metaCreativeHasIg === true) {
             $status = 'enabled';
             $statusLabel = 'IG enabled on Meta — waiting for impressions';
-            if ($anImpressions > 0 && $igImpressions === 0 && $fbImpressions === 0) {
-                $deliveryWarning = 'Impressions are on Audience Network only. Run meta:enable-instagram again to restrict ad sets to Facebook + Instagram.';
-                $statusLabel = 'IG configured — delivery on Audience Network (not IG yet)';
+            if ($igImpressionsRecent === 0 && $igImpressionsLifetime === 0) {
+                if ($anImpressions > 0 && $fbImpressions > 0) {
+                    $deliveryWarning = 'Lifetime spend is mostly Audience Network + Facebook; Instagram has 0 impressions. Ad sets were refreshed to FB+IG only — new delivery can take 24–48h. Check Meta Ads Manager → Placement breakdown (last 7 days).';
+                } elseif ($anImpressions > 0) {
+                    $deliveryWarning = 'Impressions are on Audience Network only. Run: php artisan meta:enable-instagram --force-adsets';
+                }
             }
         } elseif ($targetsIg && $fbImpressions > 0) {
             $status = 'pending';
@@ -557,6 +630,8 @@ class InstagramDeliveryService
             'delivers_instagram' => $igImpressions > 0,
             'delivers_facebook' => $fbImpressions > 0,
             'instagram_impressions' => $igImpressions,
+            'instagram_impressions_lifetime' => $igImpressionsLifetime,
+            'instagram_impressions_last_7d' => $igImpressionsRecent,
             'instagram_clicks' => $igClicks,
             'instagram_spend' => $igSpend,
             'facebook_impressions' => $fbImpressions,
