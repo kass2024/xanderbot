@@ -110,7 +110,7 @@ class AdSet extends Model
 
     public function ads(): HasMany
     {
-        return $this->hasMany(Ad::class);
+        return $this->hasMany(Ad::class, 'adset_id');
     }
 
 

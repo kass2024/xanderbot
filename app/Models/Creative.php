@@ -145,7 +145,7 @@ class Creative extends Model
 
     public function adset(): BelongsTo
     {
-        return $this->belongsTo(AdSet::class);
+        return $this->belongsTo(AdSet::class, 'adset_id');
     }
 
     public function ads(): HasMany

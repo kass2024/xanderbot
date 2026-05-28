@@ -120,7 +120,9 @@ class Campaign extends Model
     {
         return $this->hasManyThrough(
             Ad::class,
-            AdSet::class
+            AdSet::class,
+            'campaign_id',
+            'adset_id'
         );
     }
 
