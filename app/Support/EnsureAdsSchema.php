@@ -34,8 +34,10 @@ class EnsureAdsSchema
 
         $needsMetaId = Schema::hasTable('ad_sets') && ! Schema::hasColumn('ad_sets', 'meta_id');
         $needsCreativeMetaId = Schema::hasTable('creatives') && ! Schema::hasColumn('creatives', 'meta_id');
+        $needsCampaignMetaId = Schema::hasTable('campaigns') && ! Schema::hasColumn('campaigns', 'meta_id');
+        $needsCampaignDailyBudget = Schema::hasTable('campaigns') && ! Schema::hasColumn('campaigns', 'daily_budget');
 
-        if ($missing === [] && ! $needsMetaId && ! $needsCreativeMetaId) {
+        if ($missing === [] && ! $needsMetaId && ! $needsCreativeMetaId && ! $needsCampaignMetaId && ! $needsCampaignDailyBudget) {
             return;
         }
 

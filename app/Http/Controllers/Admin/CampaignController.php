@@ -11,7 +11,9 @@ use App\Models\Campaign;
 use App\Models\AdAccount;
 use App\Models\AdSet;
 use App\Services\MetaAdsService;
+use App\Support\TenantScope;
 
+use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 class CampaignController extends Controller
@@ -260,6 +262,82 @@ class CampaignController extends Controller
             return back()->withErrors([
                 'meta'=>'Unable to create campaign: '.$e->getMessage()
             ])->withInput();
+        }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Edit Campaign
+    |--------------------------------------------------------------------------
+    */
+
+    public function edit(Campaign $campaign)
+    {
+        TenantScope::assertCampaign($campaign);
+
+        return view('admin.campaigns.edit', [
+            'campaign' => $campaign,
+        ]);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Update Campaign
+    |--------------------------------------------------------------------------
+    */
+
+    public function update(Request $request, Campaign $campaign)
+    {
+        TenantScope::assertCampaign($campaign);
+
+        $data = $request->validate([
+            'name' => 'required|string|max:255',
+            'objective' => 'required|in:OUTCOME_TRAFFIC,OUTCOME_LEADS,OUTCOME_ENGAGEMENT,OUTCOME_AWARENESS,OUTCOME_SALES',
+            'daily_budget' => 'nullable|numeric|min:0',
+            'status' => 'required|in:DRAFT,ACTIVE,PAUSED,COMPLETED,draft,active,paused,completed',
+        ]);
+
+        try {
+            $status = strtoupper($data['status']);
+
+            $update = [
+                'name' => $data['name'],
+                'objective' => $data['objective'],
+                'status' => $status,
+            ];
+
+            if (isset($data['daily_budget']) && $data['daily_budget'] !== '') {
+                if (Schema::hasColumn('campaigns', 'daily_budget')) {
+                    $update['daily_budget'] = (int) round(((float) $data['daily_budget']) * 100);
+                } elseif (Schema::hasColumn('campaigns', 'budget')) {
+                    $update['budget'] = (float) $data['daily_budget'];
+                }
+            }
+
+            $campaign->update($update);
+
+            if ($campaign->meta_id) {
+                $this->meta->updateCampaign($campaign->meta_id, [
+                    'name' => $data['name'],
+                    'status' => $status,
+                ]);
+            }
+
+            return redirect()
+                ->route('admin.campaigns.index')
+                ->with('success', 'Campaign updated successfully.');
+
+        } catch (Throwable $e) {
+            Log::error('CAMPAIGN_UPDATE_FAILED', [
+                'campaign_id' => $campaign->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return back()
+                ->withInput()
+                ->withErrors([
+                    'meta' => 'Unable to update campaign: '.$e->getMessage(),
+                ]);
         }
     }
 

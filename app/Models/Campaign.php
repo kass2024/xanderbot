@@ -107,9 +107,14 @@ class Campaign extends Model
     /**
      * Campaign has many AdSets
      */
-    public function adsets(): HasMany
+    public function adSets(): HasMany
     {
         return $this->hasMany(AdSet::class);
+    }
+
+    public function adsets(): HasMany
+    {
+        return $this->adSets();
     }
 
 
