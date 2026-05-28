@@ -258,7 +258,7 @@ protected function handleError($response, $endpoint, $payload = [])
      * Use https and a real site hostname; Meta 1815520 is often a bad or Page-only link.
      * Do not send the same URL as top-level object_url with object_story_spec (Meta 1487929).
      */
-    public function normalizeLandingUrlForMeta(string $url): string
+    public function normalizeLandingUrlForMeta(string $url, bool $strict = false): string
     {
         $url = trim($url);
         if ($url === '') {
@@ -274,22 +274,63 @@ protected function handleError($response, $endpoint, $payload = [])
         $parts = parse_url($url);
         $host = strtolower((string) ($parts['host'] ?? ''));
 
-        if ($host === '' || ! str_contains($host, '.')) {
-            throw new Exception('Website URL must be a valid hostname (e.g. https://www.example.com/path).');
+        if ($host === '') {
+            throw new Exception('Website URL must include a hostname.');
         }
 
-        $blocked = ['facebook.com', 'fb.com', 'fb.me', 'messenger.com'];
-        foreach ($blocked as $b) {
-            if ($host === $b || str_ends_with($host, '.'.$b)) {
-                throw new Exception('Use your own website as the destination, not '.$b.'.');
+        if ($strict) {
+            if (! str_contains($host, '.')) {
+                throw new Exception('Website URL must be a valid hostname (e.g. https://www.example.com/path).');
+            }
+
+            $blocked = ['facebook.com', 'fb.com', 'fb.me', 'messenger.com'];
+            foreach ($blocked as $b) {
+                if ($host === $b || str_ends_with($host, '.'.$b)) {
+                    throw new Exception('Use your own website as the destination, not '.$b.'.');
+                }
+            }
+
+            if (strtolower((string) ($parts['scheme'] ?? '')) !== 'https') {
+                throw new Exception('Website URL must use https://.');
             }
         }
 
-        if (strtolower((string) ($parts['scheme'] ?? '')) !== 'https') {
-            throw new Exception('Website URL must use https://.');
+        return rtrim($url, '/');
+    }
+
+    /**
+     * URL variants to try when Meta rejects a link (1815520).
+     *
+     * @return list<string>
+     */
+    public function landingUrlCandidates(string $url): array
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return [];
         }
 
-        return $url;
+        try {
+            $primary = $this->normalizeLandingUrlForMeta($url, false);
+        } catch (Exception) {
+            return [];
+        }
+
+        $candidates = [$primary];
+        $parts = parse_url($primary);
+        $host = strtolower((string) ($parts['host'] ?? ''));
+        $path = (string) ($parts['path'] ?? '');
+        $query = isset($parts['query']) ? '?'.$parts['query'] : '';
+
+        if ($host !== '' && ! str_starts_with($host, 'www.')) {
+            $candidates[] = 'https://www.'.$host.$path.$query;
+        }
+
+        if (str_starts_with($host, 'www.')) {
+            $candidates[] = 'https://'.substr($host, 4).$path.$query;
+        }
+
+        return array_values(array_unique(array_map(fn ($u) => rtrim($u, '/'), $candidates)));
     }
 
     /**
@@ -1235,6 +1276,41 @@ public function getInsightsBatch(string $accountId): array
 
         'limit' => 500
     ]);
+}
+
+/**
+ * Fetch ad-level insights in one Meta request, keyed by Meta ad id.
+ *
+ * @return array<string, array<string, mixed>>
+ */
+public function getAdInsightsMap(?string $accountId = null, string $preset = 'maximum'): array
+{
+    $accountId = $this->formatAccount($accountId ?? config('services.meta.ad_account_id'));
+
+    $response = $this->get("{$accountId}/insights", [
+        'level' => 'ad',
+        'fields' => implode(',', [
+            'ad_id',
+            'impressions',
+            'clicks',
+            'spend',
+            'ctr',
+        ]),
+        'date_preset' => $preset,
+        'limit' => 500,
+    ]);
+
+    $map = [];
+
+    foreach ($response['data'] ?? [] as $row) {
+        $adId = (string) ($row['ad_id'] ?? '');
+
+        if ($adId !== '') {
+            $map[$adId] = $row;
+        }
+    }
+
+    return $map;
 }
 public function getAccountStatus($accountId)
 {

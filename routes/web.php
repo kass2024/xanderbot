@@ -382,34 +382,35 @@ Route::middleware(['auth','verified','role:admin'])
         |--------------------------------------------------------------------------
         */
 
+        // Live + actions before resource {ad} wildcard (so /ads/live is not ads/{ad})
+        Route::prefix('ads')->name('ads.')->group(function () {
+
+            Route::get('live', [AdController::class, 'live'])
+                ->name('live');
+
+            Route::post('bulk-status-update', [AdController::class, 'bulkStatusUpdate'])
+                ->name('bulk-status-update');
+
+            Route::patch('{ad}/activate', [AdController::class, 'activate'])
+                ->name('activate');
+
+            Route::patch('{ad}/pause', [AdController::class, 'pause'])
+                ->name('pause');
+
+            Route::post('{ad}/duplicate', [AdController::class, 'duplicate'])
+                ->name('duplicate');
+
+            Route::post('{ad}/sync', [AdController::class, 'sync'])
+                ->name('sync');
+
+            Route::get('{ad}/preview', [AdController::class, 'preview'])
+                ->name('preview');
+
+            Route::post('{ad}/publish', [AdController::class, 'publish'])
+                ->name('publish');
+        });
+
         Route::resource('ads', AdController::class)->names('ads');
-
-        // Additional Ad routes
-Route::prefix('ads')->name('ads.')->group(function () {
-
-    Route::post('bulk-status-update', [AdController::class, 'bulkStatusUpdate'])
-        ->name('bulk-status-update');
-
-    Route::patch('{ad}/activate', [AdController::class, 'activate'])
-        ->name('activate');
-
-    Route::patch('{ad}/pause', [AdController::class, 'pause'])
-        ->name('pause');
-
-    Route::post('{ad}/duplicate', [AdController::class, 'duplicate'])
-        ->name('duplicate');
-
-    Route::post('{ad}/sync', [AdController::class, 'sync'])
-        ->name('sync');
-Route::get('{ad}/preview', [AdController::class,'preview'])
-    ->name('preview');
-    Route::post('{ad}/publish', [AdController::class, 'publish'])
-        ->name('publish');
-
-    /* LIVE DASHBOARD ROUTE */
-    Route::get('live', [AdController::class,'live'])
-        ->name('live');
-});
 
         // Ad Set-specific Ad creation
         Route::get('adsets/{adset}/ads/create', 

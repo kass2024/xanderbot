@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Ad;
+use App\Models\AdAccount;
 use App\Models\AdSet;
 use App\Models\Creative;
 use App\Services\MetaAdsService;
@@ -14,8 +15,10 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\View\View;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 use Throwable;
 use Exception;
@@ -29,88 +32,214 @@ class AdController extends Controller
         $this->meta = $meta;
     }
 
+    protected function resolveMetaAccountId(): ?string
+    {
+        $fromDb = AdAccount::query()->whereNotNull('meta_id')->value('meta_id');
+
+        if ($fromDb) {
+            return (string) $fromDb;
+        }
+
+        $fromConfig = config('services.meta.ad_account_id');
+
+        return $fromConfig ? (string) $fromConfig : null;
+    }
+
+    /**
+     * @return array{lifetime: array<string, array<string, mixed>>, today: array<string, array<string, mixed>>}
+     */
+    protected function metaInsightsMaps(string $accountId): array
+    {
+        $cacheKey = 'meta_ad_insights_maps:'.md5($accountId);
+
+        return Cache::remember($cacheKey, now()->addSeconds(30), function () use ($accountId) {
+            return [
+                'lifetime' => $this->meta->getAdInsightsMap($accountId, 'maximum'),
+                'today' => $this->meta->getAdInsightsMap($accountId, 'today'),
+            ];
+        });
+    }
+
+    protected function applyMetaInsightsToAds(iterable $ads, array $lifetime, array $today): void
+    {
+        foreach ($ads as $ad) {
+            $metaId = (string) $ad->meta_ad_id;
+            $row = $lifetime[$metaId] ?? null;
+
+            if (! $row) {
+                continue;
+            }
+
+            $impressions = (int) ($row['impressions'] ?? 0);
+            $clicks = (int) ($row['clicks'] ?? 0);
+            $spend = (float) ($row['spend'] ?? 0);
+            $ctr = $impressions > 0
+                ? round(($clicks / $impressions) * 100, 2)
+                : (float) ($row['ctr'] ?? 0);
+            $metaTodaySpend = (float) ($today[$metaId]['spend'] ?? 0);
+
+            $payload = [
+                'impressions' => $impressions,
+                'clicks' => $clicks,
+                'spend' => $spend,
+                'ctr' => $ctr,
+            ];
+
+            if (Schema::hasColumn('ads', 'daily_spend')) {
+                $payload['daily_spend'] = $metaTodaySpend;
+            }
+
+            $ad->update(array_intersect_key($payload, array_flip($ad->getFillable())));
+
+            $ad->impressions = $impressions;
+            $ad->clicks = $clicks;
+            $ad->spend = $spend;
+            $ad->ctr = $ctr;
+            $ad->daily_spend = $metaTodaySpend;
+        }
+    }
+
+    protected function hydrateLiveMetricsFromMeta(iterable $ads, bool $cacheOnly = false): bool
+    {
+        $ads = collect($ads)->filter(fn (Ad $ad) => $ad->meta_ad_id);
+
+        if ($ads->isEmpty()) {
+            return true;
+        }
+
+        $accountId = $this->resolveMetaAccountId();
+
+        if (! $accountId) {
+            return true;
+        }
+
+        try {
+            $cacheKey = 'meta_ad_insights_maps:'.md5($accountId);
+
+            if ($cacheOnly) {
+                $maps = Cache::get($cacheKey);
+
+                if (! is_array($maps) || empty($maps['lifetime'])) {
+                    return false;
+                }
+            } else {
+                $maps = $this->metaInsightsMaps($accountId);
+            }
+
+            $this->applyMetaInsightsToAds(
+                $ads,
+                $maps['lifetime'] ?? [],
+                $maps['today'] ?? [],
+            );
+
+            return true;
+        } catch (Throwable $e) {
+            Log::warning('ADS_LIVE_METRICS_REFRESH_FAILED', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
+    protected function adsMetricsQuery()
+    {
+        return Ad::query()
+            ->select($this->adsSelectColumns())
+            ->latest();
+    }
+
+    protected function adsListQuery()
+    {
+        return Ad::query()
+            ->with([
+                'creative:id,name,image_url',
+                'adSet:id,name,campaign_id',
+                'adSet.campaign:id,name,ad_account_id',
+                'adSet.campaign.adAccount:id,name,meta_id',
+            ])
+            ->select($this->adsSelectColumns())
+            ->latest();
+    }
+
+    protected function adsSelectColumns(): array
+    {
+        return array_values(array_filter([
+            'id',
+            'name',
+            'adset_id',
+            'creative_id',
+            'meta_ad_id',
+            'status',
+            'impressions',
+            'clicks',
+            Schema::hasColumn('ads', 'ctr') ? 'ctr' : null,
+            'spend',
+            Schema::hasColumn('ads', 'daily_budget') ? 'daily_budget' : null,
+            Schema::hasColumn('ads', 'daily_spend') ? 'daily_spend' : null,
+            Schema::hasColumn('ads', 'pause_reason') ? 'pause_reason' : null,
+            Schema::hasColumn('ads', 'spend_date') ? 'spend_date' : null,
+            'created_at',
+        ]));
+    }
+
+    protected function buildAdsMetrics(iterable $ads, ?int $totalAds = null): array
+    {
+        $collection = collect($ads);
+
+        return [
+            'total_ads' => $totalAds ?? $collection->count(),
+            'active_ads' => $collection->where('status', 'ACTIVE')->count(),
+            'total_spend' => $collection->sum('spend'),
+            'total_clicks' => $collection->sum('clicks'),
+            'total_impressions' => $collection->sum('impressions'),
+            'avg_ctr' => $collection->avg('ctr'),
+        ];
+    }
+
+    protected function formatAdForLiveJson(Ad $ad): array
+    {
+        return [
+            'id' => $ad->id,
+            'name' => $ad->name,
+            'adset_id' => $ad->adset_id,
+            'creative_id' => $ad->creative_id,
+            'meta_ad_id' => $ad->meta_ad_id,
+            'status' => $ad->status,
+            'impressions' => (int) ($ad->impressions ?? 0),
+            'clicks' => (int) ($ad->clicks ?? 0),
+            'ctr' => (float) ($ad->ctr ?? 0),
+            'spend' => (float) ($ad->spend ?? 0),
+            'daily_spend' => (float) ($ad->daily_spend ?? 0),
+            'daily_budget' => (float) ($ad->daily_budget ?? 0),
+            'pause_reason' => $ad->pause_reason ?? null,
+        ];
+    }
+
     /*
     |--------------------------------------------------------------------------
     | LIST ADS
     |--------------------------------------------------------------------------
     */
-public function index(): View
-{
-    /*
-    |--------------------------------------------------------------------------
-    | Load Ads With Required Relations
-    |--------------------------------------------------------------------------
-    */
+    public function index(): View
+    {
+        $ads = $this->adsListQuery()->paginate(20);
 
-    $ads = Ad::query()
-        ->with([
-            'creative:id,name,image_url',
-            'adSet:id,name,campaign_id',
-            'adSet.campaign:id,name,ad_account_id',
-            'adSet.campaign.adAccount:id,name,meta_id'
-        ])
-    ->select([
-'id',
-'name',
-'adset_id',
-'creative_id',
-'meta_ad_id',
-'status',
-'impressions',
-'clicks',
-'ctr',
-'spend',
+        $allAds = $this->adsMetricsQuery()->get();
+        $this->hydrateLiveMetricsFromMeta($allAds);
 
-'daily_budget',
-'daily_spend',
-'pause_reason',
-'spend_date',
+        $freshMap = $allAds->keyBy('id');
+        $ads->setCollection(
+            $ads->getCollection()->map(fn (Ad $ad) => $freshMap->get($ad->id, $ad))
+        );
 
-'created_at'
-])
-        ->latest()
-        ->paginate(20);
+        $metrics = $this->buildAdsMetrics($allAds);
 
-
-    /*
-    |--------------------------------------------------------------------------
-    | Dashboard Metrics
-    |--------------------------------------------------------------------------
-    */
-
-    $collection = $ads->getCollection();
-
-    $metrics = [
-
-        'total_ads' => $ads->total(),
-
-        'active_ads' => $collection->where('status','ACTIVE')->count(),
-
-        'total_spend' => $collection->sum('spend'),
-
-        'total_clicks' => $collection->sum('clicks'),
-
-        'total_impressions' => $collection->sum('impressions'),
-
-        'avg_ctr' => $collection->avg('ctr')
-
-    ];
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Return View
-    |--------------------------------------------------------------------------
-    */
-
-    return view('admin.ads.index', [
-
-        'ads' => $ads,
-
-        'metrics' => $metrics
-
-    ]);
-}
+        return view('admin.ads.index', [
+            'ads' => $ads,
+            'metrics' => $metrics,
+        ]);
+    }
 
     /*
     |--------------------------------------------------------------------------
@@ -242,63 +371,14 @@ $payload = [
 
 ];
 
-// Meta can require conversion_domain for website click ads; derive from creative URL.
-if (in_array(strtoupper((string) ($adset->optimization_goal ?? '')), ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'OFFSITE_CONVERSIONS'], true)) {
-    $payload['conversion_domain'] = $this->meta->conversionDomainFromUrl((string) $creative->destination_url);
-}
-
-/*
-|--------------------------------------------------------------------------
-| LOG META REQUEST
-|--------------------------------------------------------------------------
-|
-| Useful for debugging API calls and verifying payload correctness.
-|
-*/
-
 Log::info('META_AD_CREATE_REQUEST', [
-
     'account_id' => $accountId,
-
     'adset_meta_id' => $adset->meta_id,
-
     'creative_meta_id' => $creative->meta_id,
-
-    'payload' => $payload
-
+    'payload' => $payload,
 ]);
-            /*
-            |--------------------------------------------------------------------------
-            | CREATE AD ON META
-            |--------------------------------------------------------------------------
-            */
 
-            try {
-                $response = $this->meta->createAd($accountId, $payload);
-            } catch (Throwable $e) {
-                $subcode = $this->extractMetaSubcode($e);
-
-                // Meta sometimes returns 1815520/2446391 for creatives that need a refresh, or
-                // 1487569 when the creative does not match the ad set's placements / identity.
-                // Recreate the creative on Meta and retry with the new creative_id.
-                if (in_array($subcode, [1815520, 2446391, 1487569], true)) {
-                    $newCreativeId = $this->recreateMetaCreativeForAd($accountId, $creative, $adset);
-                    $payload['creative'] = ['id' => $newCreativeId];
-                    try {
-                        $response = $this->meta->createAd($accountId, $payload);
-                    } catch (Throwable $e2) {
-                        $subcode2 = $this->extractMetaSubcode($e2);
-                        if ($subcode2 === 1487569 && isset($payload['conversion_domain'])) {
-                            unset($payload['conversion_domain']);
-                            $response = $this->meta->createAd($accountId, $payload);
-                        } else {
-                            throw $e2;
-                        }
-                    }
-                } else {
-                    throw $e;
-                }
-            }
+            $response = $this->createMetaAdWithLinkFallbacks($accountId, $payload, $creative, $adset);
 
             Log::info('META_AD_CREATE_RESPONSE', $response);
 
@@ -1069,48 +1149,58 @@ public function publish(Ad $ad): RedirectResponse
         ]);
     }
 }
-public function live(): JsonResponse
-{
-    $ads = Ad::query()
-        ->with([
-            'creative:id,name,image_url',
-            'adSet:id,name'
-        ])
-        ->select([
-            'id',
-            'name',
-            'adset_id',
-            'creative_id',
-            'meta_ad_id',
-            'status',
-            'impressions',
-            'clicks',
-            'ctr',
-            'spend',
-            'daily_spend',
-            'daily_budget',
-            'pause_reason'
-        ])
-        ->latest()
-        ->get();
+    public function live(): JsonResponse
+    {
+        try {
+            $ads = $this->adsMetricsQuery()->get();
+            $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, true);
 
-    $metrics = [
+            if (! $metaSynced) {
+                $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, false);
+            }
 
-        'total_ads' => $ads->count(),
+            $metrics = $this->buildAdsMetrics($ads);
 
-        'active_ads' => $ads->where('status','ACTIVE')->count(),
+            return response()
+                ->json([
+                    'metrics' => $metrics,
+                    'ads' => $ads->map(fn (Ad $ad) => $this->formatAdForLiveJson($ad))->values(),
+                    'refreshed_at' => now()->toIso8601String(),
+                    'meta_synced' => $metaSynced,
+                ])
+                ->header('Cache-Control', 'no-store, no-cache, must-revalidate');
+        } catch (Throwable $e) {
+            Log::error('ADS_LIVE_ENDPOINT_FAILED', [
+                'error' => $e->getMessage(),
+            ]);
 
-        'total_spend' => $ads->sum('spend'),
+            try {
+                $ads = $this->adsMetricsQuery()->get();
+                $metrics = $this->buildAdsMetrics($ads);
 
-        'total_clicks' => $ads->sum('clicks')
-
-    ];
-
-    return response()->json([
-        'metrics' => $metrics,
-        'ads' => $ads
-    ]);
-}
+                return response()->json([
+                    'metrics' => $metrics,
+                    'ads' => $ads->map(fn (Ad $ad) => $this->formatAdForLiveJson($ad))->values(),
+                    'refreshed_at' => now()->toIso8601String(),
+                    'meta_synced' => false,
+                    'warning' => 'Showing saved metrics. Meta sync will retry automatically.',
+                ]);
+            } catch (Throwable $fallbackError) {
+                return response()->json([
+                    'metrics' => [
+                        'total_ads' => 0,
+                        'active_ads' => 0,
+                        'total_spend' => 0,
+                        'total_clicks' => 0,
+                    ],
+                    'ads' => [],
+                    'refreshed_at' => now()->toIso8601String(),
+                    'meta_synced' => false,
+                    'error' => 'Live refresh unavailable.',
+                ], 500);
+            }
+        }
+    }
 
     /**
      * Meta subcode 1815520: invalid/missing link for LINK_CLICKS, LANDING_PAGE_VIEWS, etc.
@@ -1146,51 +1236,151 @@ public function live(): JsonResponse
         $url = trim((string) ($creative->destination_url ?? ''));
         if ($url === '') {
             throw new Exception(
-                'This ad set optimizes for website visits or conversions. Edit the creative and set your website URL (https://…), then create the ad again. (Meta subcode 1815520.)'
+                'This ad set optimizes for website visits. Add a destination URL on the creative, then create the ad again.'
             );
         }
+    }
 
-        $this->meta->normalizeLandingUrlForMeta($url);
+    /**
+     * Create ad on Meta (no conversion_domain). Retries URL variants + inline creative spec.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function createMetaAdWithLinkFallbacks(
+        string $accountId,
+        array $payload,
+        Creative $creative,
+        AdSet $adset
+    ): array {
+        $strategies = [];
+
+        $strategies[] = ['label' => 'creative_id', 'payload' => $payload];
+
+        foreach ($this->meta->landingUrlCandidates((string) ($creative->destination_url ?? '')) as $url) {
+            $strategies[] = [
+                'label' => 'inline_spec:'.$url,
+                'payload' => array_merge($payload, [
+                    'creative' => [
+                        'spec' => $this->buildInlineLinkCreativeSpec($creative, $adset, $url),
+                    ],
+                ]),
+            ];
+        }
+
+        foreach ($this->meta->landingUrlCandidates((string) ($creative->destination_url ?? '')) as $url) {
+            try {
+                $newId = $this->recreateMetaCreativeForAd($accountId, $creative, $adset, $url);
+                $strategies[] = [
+                    'label' => 'fresh_creative:'.$url,
+                    'payload' => array_merge($payload, [
+                        'creative' => ['id' => $newId],
+                    ]),
+                ];
+            } catch (Throwable $e) {
+                Log::warning('META_CREATIVE_RECREATE_SKIPPED', [
+                    'url' => $url,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $lastError = null;
+
+        foreach ($strategies as $strategy) {
+            try {
+                Log::info('META_AD_CREATE_ATTEMPT', [
+                    'strategy' => $strategy['label'],
+                ]);
+
+                return $this->meta->createAd($accountId, $strategy['payload']);
+            } catch (Throwable $e) {
+                $lastError = $e;
+                Log::warning('META_AD_CREATE_ATTEMPT_FAILED', [
+                    'strategy' => $strategy['label'],
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        throw $lastError ?? new Exception('Meta ad creation failed.');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildInlineLinkCreativeSpec(Creative $creative, AdSet $adset, string $landingUrl): array
+    {
+        $stored = is_array($creative->json_payload) ? $creative->json_payload : [];
+        $spec = is_array($stored['object_story_spec'] ?? null) ? $stored['object_story_spec'] : [];
+        $linkData = is_array($spec['link_data'] ?? null) ? $spec['link_data'] : [];
+
+        $pageId = (string) ($spec['page_id'] ?? config('services.meta.page_id', ''));
+
+        if ($pageId === '' && ! empty($adset->meta_id)) {
+            $metaAdSet = $this->meta->getAdSet((string) $adset->meta_id);
+            $po = $metaAdSet['promoted_object'] ?? null;
+            if (is_array($po) && ! empty($po['page_id'])) {
+                $pageId = (string) $po['page_id'];
+            }
+        }
+
+        $linkData['link'] = $landingUrl;
+        $linkData['message'] = $this->sanitizeLinkMessage(
+            (string) ($linkData['message'] ?? $creative->body ?? '')
+        );
+        $linkData['name'] = $linkData['name'] ?? ($creative->headline ?? $creative->name);
+
+        if (empty($linkData['image_hash']) && ! empty($creative->image_hash)) {
+            $linkData['image_hash'] = $creative->image_hash;
+        }
+
+        $ctaType = $creative->call_to_action ?: 'LEARN_MORE';
+        $linkData['call_to_action'] = [
+            'type' => $ctaType,
+            'value' => ['link' => $landingUrl],
+        ];
+
+        $objectStorySpec = [
+            'page_id' => $pageId,
+            'link_data' => $linkData,
+        ];
+
+        if (empty($spec['instagram_user_id'])) {
+            $ig = $this->meta->getConnectedInstagramUserId($pageId);
+            if (! empty($ig)) {
+                $objectStorySpec['instagram_user_id'] = $ig;
+            }
+        }
+
+        return [
+            'name' => (string) ($creative->name ?? 'Ad Creative'),
+            'object_story_spec' => $objectStorySpec,
+        ];
+    }
+
+    private function sanitizeLinkMessage(string $message): string
+    {
+        $message = trim($message);
+        $message = preg_replace('/\s*Destination\s+URL\s*\r?\n.*$/is', '', $message) ?? $message;
+
+        return trim($message);
     }
 
     /**
      * Recreate a Meta ad creative from our stored payload, for ad creation fallback.
      */
-    private function recreateMetaCreativeForAd(string $accountId, Creative $creative, AdSet $adset): string
-    {
-        $payload = $creative->json_payload ?? [];
-        $spec = is_array($payload['object_story_spec'] ?? null) ? $payload['object_story_spec'] : null;
-
-        if (! is_array($spec) || empty($spec['page_id']) || empty($spec['link_data']) || ! is_array($spec['link_data'])) {
-            throw new Exception('Cannot recreate Meta creative: missing object_story_spec.');
-        }
-
-        $url = $this->meta->normalizeLandingUrlForMeta((string) ($creative->destination_url ?? ''));
-        $spec['link_data']['link'] = $url;
-        if (isset($spec['link_data']['call_to_action']['value']) && is_array($spec['link_data']['call_to_action']['value'])) {
-            $spec['link_data']['call_to_action']['value']['link'] = $url;
-        }
-
-        // Ensure ad set page identity.
-        if (! empty($adset->meta_id)) {
-            $metaAdSet = $this->meta->getAdSet((string) $adset->meta_id);
-            $po = $metaAdSet['promoted_object'] ?? null;
-            if (is_array($po) && ! empty($po['page_id'])) {
-                $spec['page_id'] = (string) $po['page_id'];
-            }
-        }
-
-        // Try to include IG identity.
-        if (empty($spec['instagram_user_id'])) {
-            $ig = $this->meta->getConnectedInstagramUserId((string) $spec['page_id']);
-            if (! empty($ig)) {
-                $spec['instagram_user_id'] = $ig;
-            }
-        }
+    private function recreateMetaCreativeForAd(
+        string $accountId,
+        Creative $creative,
+        AdSet $adset,
+        ?string $landingUrl = null
+    ): string {
+        $url = $landingUrl ?? $this->meta->normalizeLandingUrlForMeta((string) ($creative->destination_url ?? ''), false);
 
         $creativePayload = [
-            'name' => (string) ($creative->name ?? 'Creative'),
-            'object_story_spec' => $spec,
+            'name' => (string) ($creative->name ?? 'Creative').' '.now()->format('YmdHis'),
+            'object_story_spec' => $this->buildInlineLinkCreativeSpec($creative, $adset, $url)['object_story_spec'],
         ];
 
         $created = $this->meta->createCreative($accountId, $creativePayload);
@@ -1199,10 +1389,15 @@ public function live(): JsonResponse
             throw new Exception('Meta creative recreation failed.');
         }
 
-        // Update local record so future ads use the working creative_id.
-        $creative->update(['meta_id' => (string) $created['id']]);
+        $newId = (string) $created['id'];
 
-        return (string) $created['id'];
+        $creative->update([
+            'meta_id' => $newId,
+            'destination_url' => $url,
+            'json_payload' => $creativePayload,
+        ]);
+
+        return $newId;
     }
 
     private function extractMetaSubcode(Throwable $e): ?int

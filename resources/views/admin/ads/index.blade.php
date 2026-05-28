@@ -24,6 +24,10 @@
         <p class="mt-1 text-sm text-slate-600">
             Create, publish and monitor ad delivery performance.
         </p>
+        <p class="mt-2 inline-flex items-center gap-2 text-xs text-slate-500">
+            <span id="live-indicator" class="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true"></span>
+            <span id="live-status">Live from Meta — updating…</span>
+        </p>
     </div>
     <div class="flex flex-shrink-0 flex-wrap items-center gap-2 sm:gap-3">
         <a
@@ -182,9 +186,9 @@ ALERTS
 <td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" id="clk-{{ $ad->id }}">{{ number_format($ad->clicks ?? 0) }}</td>
 
 {{-- CTR --}}
-<td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">
+<td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" id="ctr-{{ $ad->id }}">
 @php $ctr = $ad->ctr ?? 0; @endphp
-<span class="font-semibold @if($ctr > 3) text-emerald-600 @elseif($ctr > 1) text-amber-600 @else text-slate-600 @endif">{{ number_format($ctr,2) }}%</span>
+<span class="font-semibold ctr-value @if($ctr > 3) text-emerald-600 @elseif($ctr > 1) text-amber-600 @else text-slate-600 @endif">{{ number_format($ctr,2) }}%</span>
 </td>
 
 {{-- SPEND --}}
@@ -276,10 +280,8 @@ LIVE AJAX DASHBOARD UPDATE
 (function(){
 
 let running = false;
-
-/* =============================
-   FORMATTERS
-============================= */
+const REFRESH_MS = 20000;
+const FETCH_TIMEOUT_MS = 45000;
 
 function money(v){
     return '$' + Number(v || 0).toFixed(2);
@@ -289,10 +291,24 @@ function number(v){
     return Number(v || 0).toLocaleString();
 }
 
+function setLiveStatus(ok, refreshedAt, warning){
+    const status = document.getElementById('live-status');
+    const dot = document.getElementById('live-indicator');
 
-/* =============================
-   STATUS BADGE
-============================= */
+    if(!status || !dot){
+        return;
+    }
+
+    if(ok){
+        dot.className = 'inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse';
+        const time = refreshedAt ? new Date(refreshedAt).toLocaleTimeString() : new Date().toLocaleTimeString();
+        const suffix = warning ? ' — ' + warning : '';
+        status.textContent = 'Live from Meta — updated ' + time + ' (auto every ' + (REFRESH_MS / 1000) + 's)' + suffix;
+    } else {
+        dot.className = 'inline-flex h-2 w-2 rounded-full bg-amber-500 animate-pulse';
+        status.textContent = 'Reconnecting to Meta live feed…';
+    }
+}
 
 function renderStatus(status){
 
@@ -317,37 +333,60 @@ function renderStatus(status){
 
 }
 
+function renderCtr(ctr){
+    const value = Number(ctr || 0);
+    let color = 'text-slate-600';
 
-/* =============================
-   MAIN REFRESH FUNCTION
-============================= */
+    if(value > 3){
+        color = 'text-emerald-600';
+    } else if(value > 1){
+        color = 'text-amber-600';
+    }
+
+    return '<span class="font-semibold ctr-value ' + color + '">' + value.toFixed(2) + '%</span>';
+}
 
 async function refreshAdsDashboard(){
 
     if(running) return;
 
     running = true;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
     try{
 
         const response = await fetch(
             "{{ route('admin.ads.live') }}?t="+Date.now(),
             {
+                credentials: 'same-origin',
+                cache: 'no-store',
+                signal: controller.signal,
                 headers:{
-                    'X-Requested-With':'XMLHttpRequest'
+                    'X-Requested-With':'XMLHttpRequest',
+                    'Accept': 'application/json'
                 }
             }
         );
 
-        if(!response.ok){
-            throw new Error('Network response failed');
+        clearTimeout(timeoutId);
+
+        const raw = await response.text();
+        let data;
+
+        try {
+            data = JSON.parse(raw);
+        } catch (parseError) {
+            throw new Error('Live endpoint returned non-JSON response');
         }
 
-        const data = await response.json();
+        if(!response.ok && (!data || !Array.isArray(data.ads))){
+            throw new Error((data && data.error) || 'Live refresh failed');
+        }
 
-        /* =============================
-           UPDATE METRICS
-        ============================= */
+        if(!data || !Array.isArray(data.ads)){
+            throw new Error('Live refresh returned invalid payload');
+        }
 
         const totalAds = document.getElementById('metric-total-ads');
         const activeAds = document.getElementById('metric-active-ads');
@@ -359,21 +398,18 @@ async function refreshAdsDashboard(){
         if(totalSpend) totalSpend.textContent = money(data.metrics.total_spend);
         if(totalClicks) totalClicks.textContent = number(data.metrics.total_clicks);
 
-
-        /* =============================
-           UPDATE TABLE ROWS
-        ============================= */
-
         data.ads.forEach(ad => {
 
             const imp = document.getElementById('imp-'+ad.id);
             const clk = document.getElementById('clk-'+ad.id);
+            const ctr = document.getElementById('ctr-'+ad.id);
             const spn = document.getElementById('spend-'+ad.id);
             const tdy = document.getElementById('today-'+ad.id);
             const sts = document.getElementById('status-'+ad.id);
 
             if(imp) imp.textContent = number(ad.impressions);
             if(clk) clk.textContent = number(ad.clicks);
+            if(ctr) ctr.innerHTML = renderCtr(ad.ctr);
             if(spn) spn.textContent = money(ad.spend);
             if(tdy) tdy.textContent = money(ad.daily_spend);
 
@@ -383,33 +419,36 @@ async function refreshAdsDashboard(){
 
         });
 
-        console.log('Ads dashboard refreshed', data);
+        const warning = data.warning || (data.meta_synced === false ? 'using saved metrics' : '');
+        setLiveStatus(true, data.refreshed_at, warning);
 
     }
     catch(e){
 
         console.warn('Live dashboard update failed', e);
+        if(e && e.name === 'AbortError'){
+            setLiveStatus(true, null, 'refresh slow — showing last saved metrics');
+        } else {
+            setLiveStatus(false);
+        }
 
     }
-
-    running = false;
+    finally {
+        clearTimeout(timeoutId);
+        running = false;
+    }
 
 }
 
-
-/* =============================
-   START
-============================= */
-
 refreshAdsDashboard();
 
+setInterval(refreshAdsDashboard, REFRESH_MS);
 
-/* =============================
-   AUTO REFRESH (5s)
-============================= */
-
-setInterval(refreshAdsDashboard, 5000);
-
+document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'visible'){
+        refreshAdsDashboard();
+    }
+});
 
 })();
 
