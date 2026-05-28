@@ -21,14 +21,43 @@ class AdminDashboardController extends Controller
 {
     public function index()
     {
-        // Basic counts (no try/catch, let Laravel show real error)
+        try {
+            return $this->renderDashboard();
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('ADMIN_DASHBOARD_FAILED', [
+                'error' => $e->getMessage(),
+            ]);
 
+            return view('admin.dashboard', [
+                'stats' => [
+                    'total_users' => 0,
+                    'total_clients' => 0,
+                    'total_campaigns' => 0,
+                    'active_campaigns' => 0,
+                    'total_chatbots' => 0,
+                    'total_conversations' => 0,
+                    'total_messages' => 0,
+                    'total_templates' => 0,
+                    'messages_today' => 0,
+                ],
+                'platformMeta' => null,
+                'recentClients' => collect(),
+                'recentCampaigns' => collect(),
+                'queueStats' => ['pending_jobs' => 0, 'failed_jobs' => 0],
+                'adsStats' => ['ad_accounts' => 0, 'ad_sets' => 0, 'ads' => 0],
+                'dashboardError' => 'Some dashboard metrics could not be loaded.',
+            ]);
+        }
+    }
+
+    protected function renderDashboard()
+    {
         $stats = [
             'total_users'         => class_exists(User::class) ? User::count() : 0,
             'total_clients'       => class_exists(Client::class) ? Client::count() : 0,
             'total_campaigns'     => class_exists(Campaign::class) ? Campaign::count() : 0,
             'active_campaigns'    => class_exists(Campaign::class)
-                                        ? Campaign::where('status', 'active')->count()
+                                        ? Campaign::whereIn('status', ['active', 'ACTIVE'])->count()
                                         : 0,
             'total_chatbots'      => class_exists(Chatbot::class) ? Chatbot::count() : 0,
             'total_conversations' => class_exists(Conversation::class) ? Conversation::count() : 0,

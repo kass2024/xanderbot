@@ -26,8 +26,8 @@ class MetaAdsService
 
         $this->debug = config('app.debug',false);
 
-        if(!$this->accessToken){
-            throw new Exception('Meta access token missing in config/services.php');
+        if (! $this->accessToken) {
+            Log::warning('META_ACCESS_TOKEN_MISSING');
         }
 
         Log::info('META_SERVICE_INITIALIZED',[
@@ -53,7 +53,9 @@ class MetaAdsService
 
     protected function formatAccount(?string $id): string
     {
-        if(!$id){
+        $id = $id ?: config('services.meta.ad_account_id');
+
+        if (! $id) {
             throw new Exception('Meta Ad Account ID missing.');
         }
 
