@@ -84,6 +84,7 @@ class DebugAdInstagram extends Command
             ['Meta creative has IG id', $audit['meta_creative_has_ig'] === null ? 'unknown' : (($audit['meta_creative_has_ig'] ?? false) ? 'yes' : 'no')],
             ['IG impressions', number_format($audit['instagram_impressions'] ?? 0)],
             ['FB impressions', number_format($audit['facebook_impressions'] ?? 0)],
+            ['Audience Network impr.', number_format($audit['audience_network_impressions'] ?? 0)],
             ['instagram_user_id', (string) ($audit['instagram_user_id'] ?? '—')],
             ['Enabled at', (string) ($audit['instagram_enabled_at'] ?? '—')],
         ]);
@@ -106,8 +107,8 @@ class DebugAdInstagram extends Command
                 if (is_string($oss)) {
                     $oss = json_decode($oss, true);
                 }
-                $ig = is_array($oss) ? ($oss['instagram_user_id'] ?? null) : null;
-                $this->line('  creative.object_story_spec.instagram_user_id: '.($ig ?: 'MISSING'));
+                $igActor = is_array($oss) ? ($oss['instagram_user_id'] ?? null) : null;
+                $this->line('  creative.object_story_spec.instagram_user_id: '.($igActor ?: 'MISSING'));
             } catch (Throwable $e) {
                 $this->error('  '.$e->getMessage());
             }
@@ -115,9 +116,15 @@ class DebugAdInstagram extends Command
             try {
                 $rows = $meta->getInsights((string) $ad->meta_ad_id, 'maximum', ['breakdowns' => 'publisher_platform']);
                 $this->line('  publisher_platform breakdown:');
+                if ($rows === []) {
+                    $this->line('    (no breakdown rows)');
+                }
                 foreach ($rows as $row) {
                     $this->line('    - '.($row['publisher_platform'] ?? '?').': '
                         .($row['impressions'] ?? 0).' impr, $'.($row['spend'] ?? 0));
+                }
+                if (! empty($audit['delivery_warning'])) {
+                    $this->warn('  '.$audit['delivery_warning']);
                 }
             } catch (Throwable $e) {
                 $this->error('  Insights: '.$e->getMessage());

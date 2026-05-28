@@ -497,6 +497,8 @@ class InstagramDeliveryService
         $fbClicks = (int) ($fb['clicks'] ?? 0);
         $igSpend = (float) ($ig['spend'] ?? 0);
         $fbSpend = (float) ($fb['spend'] ?? 0);
+        $an = $placementDelivery['audience_network'] ?? [];
+        $anImpressions = (int) ($an['impressions'] ?? 0);
 
         $targetsIg = $ad->adSet?->targetsInstagram() ?? false;
         $creativeHasIg = $ad->creative ? $this->creativeHasInstagramActor($ad->creative) : false;
@@ -524,12 +526,18 @@ class InstagramDeliveryService
         $status = 'not_configured';
         $statusLabel = 'Not configured for Instagram';
 
+        $deliveryWarning = null;
+
         if ($igImpressions > 0) {
             $status = 'live';
             $statusLabel = 'Delivering on Instagram ('.number_format($igImpressions).' impressions)';
         } elseif ($markedEnabled || $configuredOnMeta || $metaCreativeHasIg === true) {
             $status = 'enabled';
             $statusLabel = 'IG enabled on Meta — waiting for impressions';
+            if ($anImpressions > 0 && $igImpressions === 0 && $fbImpressions === 0) {
+                $deliveryWarning = 'Impressions are on Audience Network only. Run meta:enable-instagram again to restrict ad sets to Facebook + Instagram.';
+                $statusLabel = 'IG configured — delivery on Audience Network (not IG yet)';
+            }
         } elseif ($targetsIg && $fbImpressions > 0) {
             $status = 'pending';
             $statusLabel = 'IG targeted — click Enable IG or wait for delivery';
@@ -554,6 +562,8 @@ class InstagramDeliveryService
             'facebook_impressions' => $fbImpressions,
             'facebook_clicks' => $fbClicks,
             'facebook_spend' => $fbSpend,
+            'audience_network_impressions' => $anImpressions,
+            'delivery_warning' => $deliveryWarning,
             'checks' => [
                 ['ok' => $targetsIg, 'label' => 'Ad set targets Instagram'],
                 ['ok' => $markedEnabled, 'label' => 'Enable IG applied (instagram_enabled_at)'],
@@ -598,7 +608,7 @@ class InstagramDeliveryService
     {
         $version = config('services.meta.graph_version', 'v19.0');
         $base = 'https://graph.facebook.com/'.$version;
-        $token = config('services.meta.token', 'YOUR_ACCESS_TOKEN');
+        $token = 'REDACTED_USE_ENV_META_TOKEN';
         $accountId = config('services.meta.ad_account_id', 'act_ACCOUNT');
         if (! str_starts_with((string) $accountId, 'act_')) {
             $accountId = 'act_'.$accountId;

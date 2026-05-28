@@ -51,7 +51,13 @@
         <strong>IG live</strong> means Meta insights show Instagram impressions — this can lag by hours after enabling.
     </p>
 
-    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+    @if(!empty($ig['delivery_warning']))
+        <div class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-900">
+            {{ $ig['delivery_warning'] }}
+        </div>
+    @endif
+
+    <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-4 text-sm">
         <div class="rounded-xl bg-gray-50 p-4">
             <p class="text-xs text-gray-500">Facebook impressions</p>
             <p class="text-xl font-bold tabular-nums">{{ number_format($ig['facebook_impressions'] ?? 0) }}</p>
@@ -65,6 +71,11 @@
         <div class="rounded-xl bg-gray-50 p-4">
             <p class="text-xs text-gray-500">instagram_user_id</p>
             <p class="font-mono text-xs break-all">{{ $ig['instagram_user_id'] ?? '—' }}</p>
+        </div>
+        <div class="rounded-xl bg-gray-50 p-4">
+            <p class="text-xs text-gray-500">Audience Network impr.</p>
+            <p class="text-xl font-bold tabular-nums text-amber-700">{{ number_format($ig['audience_network_impressions'] ?? 0) }}</p>
+            <p class="text-xs text-gray-500">Not Facebook/Instagram</p>
         </div>
         <div class="rounded-xl bg-gray-50 p-4">
             <p class="text-xs text-gray-500">Enabled at (local)</p>

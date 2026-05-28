@@ -252,7 +252,15 @@ protected function handleError($response, $endpoint, $payload = [])
             return true;
         }
 
-        if (! in_array('instagram', $platforms, true) || ! in_array('facebook', $platforms, true)) {
+        $extras = array_intersect($platforms, ['audience_network', 'messenger', 'unknown']);
+        if ($extras !== []) {
+            return true;
+        }
+
+        $normalized = array_values(array_unique($platforms));
+        sort($normalized);
+
+        if ($normalized !== ['facebook', 'instagram']) {
             return true;
         }
 
@@ -588,9 +596,12 @@ protected function handleError($response, $endpoint, $payload = [])
             $platforms = [];
         }
 
-        $merged = array_values(array_unique(array_merge($platforms, ['facebook', 'instagram'])));
+        $targeting['publisher_platforms'] = ['facebook', 'instagram'];
 
-        $targeting['publisher_platforms'] = $merged;
+        unset(
+            $targeting['messenger_positions'],
+            $targeting['audience_network_positions'],
+        );
 
         return $this->enrichPlacementTargeting($targeting);
     }
@@ -1537,32 +1548,30 @@ public function getInsights(string $objectId, string $preset = 'maximum', array 
     $params = array_merge([
         'fields' => $fields,
         'date_preset' => $preset,
-        'limit' => 1
+        'limit' => 1,
     ], $extra);
+
+    if (isset($extra['breakdowns'])) {
+        $params['limit'] = 100;
+    }
 
     Log::info('META_INSIGHTS_REQUEST', [
         'object_id' => $objectId,
         'preset' => $preset,
-        'params' => $params
+        'params' => $params,
     ]);
 
     /*
     |--------------------------------------------------------------------------
-    | Call Meta API
-    |--------------------------------------------------------------------------
-    */
-
-    $response = $this->get("{$objectId}/insights", $params);
-
-    /*
-    |--------------------------------------------------------------------------
-    | If breakdown requested → return raw rows (for audience/device tables)
+    | If breakdown requested → return all platform rows (paginated)
     |--------------------------------------------------------------------------
     */
 
     if (isset($extra['breakdowns'])) {
-        return $response['data'] ?? [];
+        return $this->collectPagedData("{$objectId}/insights", $params);
     }
+
+    $response = $this->get("{$objectId}/insights", $params);
 
     /*
     |--------------------------------------------------------------------------

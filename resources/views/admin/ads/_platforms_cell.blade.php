@@ -5,6 +5,7 @@
     $igImp = (int) ($p['instagram_impressions'] ?? 0);
     $igClicks = (int) ($p['instagram_clicks'] ?? 0);
     $fbImp = (int) ($p['facebook_impressions'] ?? 0);
+    $anImp = (int) ($p['audience_network_impressions'] ?? 0);
     $targetsIg = (bool) ($p['targets_instagram'] ?? false);
     $showEnable = in_array($status, ['pending', 'not_configured'], true) && !empty($ad->meta_ad_id);
 @endphp
@@ -23,8 +24,12 @@
         <span class="inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15" title="{{ $p['status_label'] ?? 'IG enabled on Meta' }}">
             IG enabled
         </span>
-        @if($fbImp > 0)
+        @if($anImp > 0 && $igImp === 0 && $fbImp === 0)
+            <span class="text-[11px] text-amber-700">Delivering on Audience Network · re-run Enable IG</span>
+        @elseif($fbImp > 0)
             <span class="text-[11px] text-slate-500">FB {{ number_format($fbImp) }} impr. · IG impressions pending</span>
+        @elseif($anImp > 0)
+            <span class="text-[11px] text-slate-500">AN {{ number_format($anImp) }} impr.</span>
         @endif
     @elseif($status === 'pending')
         <span class="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/15">

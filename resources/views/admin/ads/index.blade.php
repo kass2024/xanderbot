@@ -378,6 +378,7 @@ function renderPlatforms(placement, adId, enableUrl){
     const igImp = Number(placement.instagram_impressions || 0);
     const fbImp = Number(placement.facebook_impressions || 0);
     const igClicks = Number(placement.instagram_clicks || 0);
+    const anImp = Number(placement.audience_network_impressions || 0);
     const targetsIg = !!placement.targets_instagram;
 
     let badge = '<span class="text-xs text-slate-400">—</span>';
@@ -387,8 +388,12 @@ function renderPlatforms(placement, adId, enableUrl){
         badge = '<span class="inline-flex rounded-md bg-fuchsia-50 px-2 py-0.5 text-xs font-semibold text-fuchsia-800 ring-1 ring-fuchsia-600/15" title="' + igImp.toLocaleString() + ' impressions, ' + igClicks.toLocaleString() + ' clicks on Instagram">IG live · ' + igImp.toLocaleString() + ' impr.</span>';
     } else if(status === 'enabled'){
         badge = '<span class="inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15">IG enabled</span>';
-        if(fbImp > 0){
+        if(anImp > 0 && igImp === 0 && fbImp === 0){
+            sub = '<span class="text-[11px] text-amber-700">Delivering on Audience Network · re-run Enable IG</span>';
+        } else if(fbImp > 0){
             sub = '<span class="text-[11px] text-slate-500">FB ' + fbImp.toLocaleString() + ' impr. · IG impressions pending</span>';
+        } else if(anImp > 0){
+            sub = '<span class="text-[11px] text-slate-500">AN ' + anImp.toLocaleString() + ' impr.</span>';
         }
     } else if(status === 'pending'){
         badge = '<span class="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/15">FB only · IG pending</span>';
