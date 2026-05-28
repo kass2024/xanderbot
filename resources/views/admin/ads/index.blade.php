@@ -195,7 +195,7 @@ ALERTS
 <td class="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-slate-800 lg:px-5" id="spend-{{ $ad->id }}">${{ number_format($ad->spend ?? 0,2) }}</td>
 
 {{-- TODAY --}}
-<td class="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-xander-secondary lg:px-5" id="today-{{ $ad->id }}">${{ number_format($ad->daily_spend ?? 0,2) }}</td>
+<td class="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-xander-secondary lg:px-5" id="today-{{ $ad->id }}">${{ number_format($ad->displayDailySpend(), 2) }}</td>
 
 {{-- BUDGET --}}
 <td class="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums text-slate-700 lg:px-5">${{ number_format($ad->daily_budget ?? 0,2) }}</td>
@@ -203,7 +203,7 @@ ALERTS
 {{-- REASON --}}
 <td class="px-4 py-3 align-top lg:px-5">
 
-@if($ad->pause_reason === 'budget_limit')
+@if(in_array($ad->pause_reason, ['budget_limit', 'budget'], true))
 <span class="inline-flex rounded-md bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-800 ring-1 ring-red-600/15">Budget limit</span>
 @elseif($ad->pause_reason === 'manual')
 <span class="inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-400/20">Manual</span>

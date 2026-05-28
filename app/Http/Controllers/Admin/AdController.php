@@ -8,6 +8,7 @@ use App\Models\AdAccount;
 use App\Models\AdSet;
 use App\Models\Creative;
 use App\Services\MetaAdsService;
+use App\Support\AdBudgetGuard;
 
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
@@ -60,23 +61,34 @@ class AdController extends Controller
         });
     }
 
-    protected function applyMetaInsightsToAds(iterable $ads, array $lifetime, array $today): void
+    protected function parseInsightMetric(array $row, string $key): float
+    {
+        return (float) ($row[$key] ?? 0);
+    }
+
+    protected function applyMetaInsightsToAds(iterable $ads, array $lifetime, array $today, bool $enforceBudget = true): void
     {
         foreach ($ads as $ad) {
             $metaId = (string) $ad->meta_ad_id;
-            $row = $lifetime[$metaId] ?? null;
+            $lifetimeRow = $lifetime[$metaId] ?? null;
+            $todayRow = $today[$metaId] ?? null;
 
-            if (! $row) {
+            if (! $lifetimeRow && ! $todayRow) {
                 continue;
             }
 
-            $impressions = (int) ($row['impressions'] ?? 0);
-            $clicks = (int) ($row['clicks'] ?? 0);
-            $spend = (float) ($row['spend'] ?? 0);
+            $impressions = (int) ($lifetimeRow['impressions'] ?? $todayRow['impressions'] ?? 0);
+            $clicks = (int) ($lifetimeRow['clicks'] ?? $todayRow['clicks'] ?? 0);
+            $spend = $this->parseInsightMetric($lifetimeRow ?? [], 'spend');
+            if ($spend <= 0 && $todayRow) {
+                $spend = $this->parseInsightMetric($todayRow, 'spend');
+            }
             $ctr = $impressions > 0
                 ? round(($clicks / $impressions) * 100, 2)
-                : (float) ($row['ctr'] ?? 0);
-            $metaTodaySpend = (float) ($today[$metaId]['spend'] ?? 0);
+                : (float) ($lifetimeRow['ctr'] ?? $todayRow['ctr'] ?? 0);
+            $metaTodaySpend = $todayRow
+                ? $this->parseInsightMetric($todayRow, 'spend')
+                : 0;
 
             $payload = [
                 'impressions' => $impressions,
@@ -85,21 +97,39 @@ class AdController extends Controller
                 'ctr' => $ctr,
             ];
 
-            if (Schema::hasColumn('ads', 'daily_spend')) {
-                $payload['daily_spend'] = $metaTodaySpend;
+            if (Schema::hasColumn('ads', 'spend_date')) {
+                $payload = array_merge($payload, AdBudgetGuard::metricsPayloadFromMetaToday($ad, $metaTodaySpend));
+            } elseif (Schema::hasColumn('ads', 'daily_spend')) {
+                $payload['daily_spend'] = AdBudgetGuard::isBudgetLimitPaused($ad)
+                    ? 0
+                    : AdBudgetGuard::cappedSessionSpend($ad, $metaTodaySpend);
             }
 
-            $ad->update(array_intersect_key($payload, array_flip($ad->getFillable())));
+            $ad->update(AdBudgetGuard::filterPersistablePayload(
+                array_intersect_key($payload, array_flip($ad->getFillable()))
+            ));
 
             $ad->impressions = $impressions;
             $ad->clicks = $clicks;
             $ad->spend = $spend;
             $ad->ctr = $ctr;
-            $ad->daily_spend = $metaTodaySpend;
+            $ad->daily_spend = (float) ($payload['daily_spend'] ?? 0);
+            if (isset($payload['spend_date'])) {
+                $ad->spend_date = $payload['spend_date'];
+            }
+            if (isset($payload['daily_spend_anchor'])) {
+                $ad->daily_spend_anchor = (float) $payload['daily_spend_anchor'];
+            }
+
+            AdBudgetGuard::reconcileBudgetLimitPause($ad, $metaTodaySpend);
+
+            if ($enforceBudget) {
+                AdBudgetGuard::enforce($ad, $this->meta, $metaTodaySpend);
+            }
         }
     }
 
-    protected function hydrateLiveMetricsFromMeta(iterable $ads, bool $cacheOnly = false): bool
+    protected function hydrateLiveMetricsFromMeta(iterable $ads, bool $cacheOnly = false, bool $enforceBudget = true): bool
     {
         $ads = collect($ads)->filter(fn (Ad $ad) => $ad->meta_ad_id);
 
@@ -130,6 +160,7 @@ class AdController extends Controller
                 $ads,
                 $maps['lifetime'] ?? [],
                 $maps['today'] ?? [],
+                $enforceBudget,
             );
 
             return true;
@@ -177,6 +208,7 @@ class AdController extends Controller
             'spend',
             Schema::hasColumn('ads', 'daily_budget') ? 'daily_budget' : null,
             Schema::hasColumn('ads', 'daily_spend') ? 'daily_spend' : null,
+            Schema::hasColumn('ads', 'daily_spend_anchor') ? 'daily_spend_anchor' : null,
             Schema::hasColumn('ads', 'pause_reason') ? 'pause_reason' : null,
             Schema::hasColumn('ads', 'spend_date') ? 'spend_date' : null,
             'created_at',
@@ -210,7 +242,7 @@ class AdController extends Controller
             'clicks' => (int) ($ad->clicks ?? 0),
             'ctr' => (float) ($ad->ctr ?? 0),
             'spend' => (float) ($ad->spend ?? 0),
-            'daily_spend' => (float) ($ad->daily_spend ?? 0),
+            'daily_spend' => $ad->displayDailySpend(),
             'daily_budget' => (float) ($ad->daily_budget ?? 0),
             'pause_reason' => $ad->pause_reason ?? null,
         ];
@@ -226,7 +258,7 @@ class AdController extends Controller
         $ads = $this->adsListQuery()->paginate(20);
 
         $allAds = $this->adsMetricsQuery()->get();
-        $this->hydrateLiveMetricsFromMeta($allAds);
+        $this->hydrateLiveMetricsFromMeta($allAds, false, true);
 
         $freshMap = $allAds->keyBy('id');
         $ads->setCollection(
@@ -890,6 +922,18 @@ public function activate(Ad $ad): RedirectResponse
 {
     try {
 
+        if (AdBudgetGuard::isBudgetLimitPaused($ad)) {
+            return back()->withErrors([
+                'activate' => 'This ad was paused for daily budget. Use Publish to start a new spend session.',
+            ]);
+        }
+
+        if (! AdBudgetGuard::canManualPublish($ad)) {
+            return back()->withErrors([
+                'activate' => AdBudgetGuard::publishBlockedMessage($ad),
+            ]);
+        }
+
         if ($ad->meta_ad_id) {
 
             $this->meta->updateAd(
@@ -1119,14 +1163,18 @@ public function publish(Ad $ad): RedirectResponse
             );
         }
 
-        /*
-        |------------------------------------------------------------------
-        | Update Local Ad (IMPORTANT FIX)
-        |------------------------------------------------------------------
-        */
+        if (! AdBudgetGuard::canManualPublish($ad)) {
+            throw new Exception(AdBudgetGuard::publishBlockedMessage($ad));
+        }
+
+        $todayInsights = $this->meta->getInsights($ad->meta_ad_id, 'today');
+        $metaTodaySpend = (float) ($todayInsights['spend'] ?? 0);
+
+        AdBudgetGuard::beginNewSpendSession($ad, $metaTodaySpend);
+
         $ad->update([
             'status' => 'ACTIVE',
-            'pause_reason' => null // ✅ CRITICAL FIX
+            'pause_reason' => null,
         ]);
 
         Log::info('AD_PUBLISHED_SUCCESS', [
@@ -1153,10 +1201,10 @@ public function publish(Ad $ad): RedirectResponse
     {
         try {
             $ads = $this->adsMetricsQuery()->get();
-            $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, true);
+            $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, true, true);
 
             if (! $metaSynced) {
-                $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, false);
+                $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, false, true);
             }
 
             $metrics = $this->buildAdsMetrics($ads);

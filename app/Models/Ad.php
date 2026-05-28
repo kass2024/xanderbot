@@ -67,6 +67,7 @@ protected $fillable = [
     /* Budget control */
     'daily_budget',
     'daily_spend',
+    'daily_spend_anchor',
     'pause_reason',
     'spend_date',
 
@@ -103,6 +104,7 @@ protected $casts = [
 
     'daily_budget' => 'float',
     'daily_spend' => 'float',
+    'daily_spend_anchor' => 'float',
     'spend_date' => 'date',
 
     'impressions' => 'integer',
@@ -262,6 +264,24 @@ protected $casts = [
         return !empty($this->meta_ad_id);
     }
 
+    public function hasReachedDailyBudget(): bool
+    {
+        if ($this->pause_reason === 'budget_limit' && $this->status === self::STATUS_PAUSED) {
+            return false;
+        }
+
+        return (float) $this->daily_budget > 0
+            && (float) $this->daily_spend >= (float) $this->daily_budget;
+    }
+
+    public function displayDailySpend(): float
+    {
+        if (in_array($this->pause_reason, ['budget_limit', 'budget'], true) && $this->status === self::STATUS_PAUSED) {
+            return 0;
+        }
+
+        return (float) ($this->daily_spend ?? 0);
+    }
 
     /**
      * Link to Meta Ads Manager

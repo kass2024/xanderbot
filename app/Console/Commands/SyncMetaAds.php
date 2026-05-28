@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 use App\Services\MetaAdsService;
+use App\Support\AdBudgetGuard;
 use App\Models\AdAccount;
 use App\Models\Campaign;
 use App\Models\AdSet;
@@ -189,64 +190,18 @@ class SyncMetaAds extends Command
                         ? round(($clicks / $impressions) * 100, 2)
                         : 0;
 
-                    /*
-                    |----------------------------------------------
-                    | 🔥 SMART BUDGET CONTROL
-                    |----------------------------------------------
-                    */
-                    $status = $ad->status;
-                    $pauseReason = $ad->pause_reason;
+                    $metricsPayload = AdBudgetGuard::metricsPayloadFromMetaToday($ad, $todaySpend);
 
-                    if ($ad->daily_budget) {
-
-                        if ($todaySpend >= $ad->daily_budget) {
-
-                            if ($pauseReason !== 'budget') {
-
-                                Log::warning('AUTO_PAUSE', ['ad' => $metaAdId]);
-
-                                $this->safeMetaCall(fn() =>
-                                    $this->meta->updateAd($metaAdId, [
-                                        'status' => 'PAUSED'
-                                    ])
-                                );
-
-                                $status = 'PAUSED';
-                                $pauseReason = 'budget';
-                            }
-
-                        } else {
-
-                            if ($pauseReason === 'budget') {
-
-                                Log::info('AUTO_RESUME', ['ad' => $metaAdId]);
-
-                                $this->safeMetaCall(fn() =>
-                                    $this->meta->updateAd($metaAdId, [
-                                        'status' => 'ACTIVE'
-                                    ])
-                                );
-
-                                $status = 'ACTIVE';
-                                $pauseReason = null;
-                            }
-                        }
-                    }
-
-                    /*
-                    |----------------------------------------------
-                    | SAVE METRICS
-                    |----------------------------------------------
-                    */
-                    $ad->update([
-                        'status' => $status,
-                        'pause_reason' => $pauseReason,
+                    $ad->update(AdBudgetGuard::filterPersistablePayload(array_merge([
                         'impressions' => $impressions,
                         'clicks' => $clicks,
                         'ctr' => $ctr,
-                        'daily_spend' => $todaySpend,
-                        'spend_date' => Carbon::today()->toDateString()
-                    ]);
+                        'spend' => (float) ($insight['spend'] ?? $todaySpend),
+                    ], $metricsPayload)));
+
+                    $ad->refresh();
+                    AdBudgetGuard::reconcileBudgetLimitPause($ad, $todaySpend);
+                    AdBudgetGuard::enforce($ad, $this->meta, $todaySpend);
 
                 } catch (\Throwable $e) {
 
