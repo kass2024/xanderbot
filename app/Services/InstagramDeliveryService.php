@@ -109,7 +109,7 @@ class InstagramDeliveryService
      *
      * @return array<string, mixed>
      */
-    public function ensureBrandPageDeliveryAll(bool $reprovision = false): array
+    public function ensureBrandPageDeliveryAll(bool $reprovision = false, bool $forceCreatives = false): array
     {
         $pageId = trim((string) config('services.meta.page_id', ''));
 
@@ -153,9 +153,10 @@ class InstagramDeliveryService
             ->whereNotNull('meta_id')
             ->with(['adset.campaign.adAccount', 'campaign.adAccount'])
             ->orderBy('id')
-            ->each(function (Creative $creative) use (&$stats) {
+            ->each(function (Creative $creative) use (&$stats, $forceCreatives) {
                 try {
-                    if ($this->repairCreative($creative, $this->creativeNeedsBrandPageRepair($creative))) {
+                    $force = $forceCreatives || $this->creativeNeedsBrandPageRepair($creative);
+                    if ($this->repairCreative($creative, $force)) {
                         $stats['creatives']['updated']++;
                     } else {
                         $stats['creatives']['skipped']++;
@@ -801,8 +802,7 @@ class InstagramDeliveryService
             return true;
         }
 
-        $resolvePage = $brandPageId !== '' ? $brandPageId : $pageId;
-        $expectedIg = $this->meta->resolveInstagramUserId($resolvePage);
+        $expectedIg = $this->meta->resolveInstagramUserId($brandPageId !== '' ? $brandPageId : $pageId);
 
         if ($expectedIg === null || $expectedIg === '') {
             return true;
@@ -813,6 +813,14 @@ class InstagramDeliveryService
         }
 
         return false;
+    }
+
+    /**
+     * Creatives still storing a different instagram_user_id than .env / resolve.
+     */
+    public function creativeHasWrongInstagramId(Creative $creative): bool
+    {
+        return $this->creativeNeedsBrandPageRepair($creative);
     }
 
     public function adNeedsBrandPageRepair(Ad $ad): bool

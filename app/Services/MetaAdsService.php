@@ -438,10 +438,26 @@ protected function handleError($response, $endpoint, $payload = [])
     }
 
     /**
-     * Instagram actor id for ad creatives — Page, ad account, then .env fallback.
+     * Explicit Instagram id from .env (META_INSTAGRAM_USER_ID), when set.
+     */
+    public function configuredInstagramUserId(): ?string
+    {
+        $fromEnv = trim((string) config('services.meta.instagram_user_id', ''));
+
+        return $fromEnv !== '' ? $fromEnv : null;
+    }
+
+    /**
+     * Instagram actor id for ad creatives.
+     * META_INSTAGRAM_USER_ID wins when set (so Page-linked wrong IG does not override).
      */
     public function resolveInstagramUserId(?string $pageId = null): ?string
     {
+        $fromEnv = $this->configuredInstagramUserId();
+        if ($fromEnv !== null) {
+            return $fromEnv;
+        }
+
         foreach ($this->instagramPageIdCandidates($pageId) as $candidate) {
             $found = $this->lookupInstagramIdFromPage($candidate);
             if ($found !== null) {
@@ -454,9 +470,7 @@ protected function handleError($response, $endpoint, $payload = [])
             return $fromAccount;
         }
 
-        $fromEnv = trim((string) config('services.meta.instagram_user_id', ''));
-
-        return $fromEnv !== '' ? $fromEnv : null;
+        return null;
     }
 
     /**
@@ -467,16 +481,22 @@ protected function handleError($response, $endpoint, $payload = [])
     public function diagnoseInstagramConnection(?string $pageId = null): array
     {
         $pageId = trim((string) ($pageId ?? config('services.meta.page_id', '')));
+        $envIg = $this->configuredInstagramUserId();
         $report = [
             'page_id' => $pageId,
             'ad_account_id' => config('services.meta.ad_account_id'),
-            'instagram_user_id' => null,
-            'source' => null,
+            'instagram_user_id' => $envIg,
+            'source' => $envIg !== null ? 'env:META_INSTAGRAM_USER_ID (override)' : null,
             'page_connected' => false,
-            'env_fallback' => trim((string) config('services.meta.instagram_user_id', '')) !== '',
-            'ready' => false,
+            'page_linked_instagram_id' => null,
+            'env_fallback' => $envIg !== null,
+            'ready' => $envIg !== null,
             'hints' => [],
         ];
+
+        if ($envIg !== null) {
+            $report['hints'][] = 'Using META_INSTAGRAM_USER_ID from .env. Rebuild creatives after changing: php artisan meta:ensure-brand-pages --force-creatives';
+        }
 
         if ($pageId !== '') {
             foreach (['connected_instagram_account{id,username}', 'instagram_business_account{id,username}'] as $fields) {
@@ -486,9 +506,12 @@ protected function handleError($response, $endpoint, $payload = [])
                     $account = $res[$key] ?? null;
                     if (is_array($account) && ! empty($account['id'])) {
                         $report['page_connected'] = true;
-                        $report['instagram_user_id'] = (string) $account['id'];
+                        $report['page_linked_instagram_id'] = (string) $account['id'];
                         $report['instagram_username'] = $account['username'] ?? null;
-                        $report['source'] = 'page:'.$key;
+                        if ($envIg === null) {
+                            $report['instagram_user_id'] = (string) $account['id'];
+                            $report['source'] = 'page:'.$key;
+                        }
                         break;
                     }
                 } catch (Exception $e) {
@@ -505,12 +528,11 @@ protected function handleError($response, $endpoint, $payload = [])
             }
         }
 
-        if ($report['instagram_user_id'] === null && $report['env_fallback']) {
-            $report['instagram_user_id'] = trim((string) config('services.meta.instagram_user_id', ''));
-            $report['source'] = 'env:META_INSTAGRAM_USER_ID';
-        }
-
         $report['ready'] = $report['instagram_user_id'] !== null && $report['instagram_user_id'] !== '';
+
+        if ($envIg !== null && $report['page_linked_instagram_id'] !== null && $report['page_linked_instagram_id'] !== $envIg) {
+            $report['hints'][] = 'Page '.$pageId.' is linked to a different Instagram ('.$report['page_linked_instagram_id'].'). Ads use .env id '.$envIg.' — run meta:ensure-brand-pages --force-creatives.';
+        }
 
         if (! $report['ready']) {
             $report['hints'] = [

@@ -9,7 +9,8 @@ use Throwable;
 class EnsureBrandPageDelivery extends Command
 {
     protected $signature = 'meta:ensure-brand-pages
-                            {--reprovision : Create new Meta ads only when delivery is still on Audience Network (advanced)}';
+                            {--reprovision : Create new Meta ads only when delivery is still on Audience Network (advanced)}
+                            {--force-creatives : Rebuild every Meta creative with current META_INSTAGRAM_USER_ID}';
 
     protected $description = 'Link all ads to META_PAGE_ID (Facebook) and the connected Instagram account on Meta';
 
@@ -35,7 +36,10 @@ class EnsureBrandPageDelivery extends Command
         $this->info('Instagram user id: '.($instagram->verify()['instagram_user_id'] ?? '—'));
 
         try {
-            $stats = $instagram->ensureBrandPageDeliveryAll((bool) $this->option('reprovision'));
+            $stats = $instagram->ensureBrandPageDeliveryAll(
+                (bool) $this->option('reprovision'),
+                (bool) $this->option('force-creatives')
+            );
         } catch (Throwable $e) {
             $this->error($e->getMessage());
 
