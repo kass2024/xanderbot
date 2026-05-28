@@ -24,6 +24,9 @@
         <p class="mt-1 text-sm text-slate-600">
             Create, publish and monitor ad delivery performance.
         </p>
+        <p class="mt-1 max-w-2xl text-xs text-slate-500">
+            Paid ads are shown to your <strong class="font-medium text-slate-600">target audience</strong> (countries, interests, age) in Facebook &amp; Instagram feeds — not only on your Page. USD spend = impressions and clicks from those people. “FB + IG pages” only sets which Page/Instagram account the ad runs as.
+        </p>
         <p class="mt-2 inline-flex items-center gap-2 text-xs text-slate-500">
             <span id="live-indicator" class="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true"></span>
             <span id="live-status">Live from Meta — updating…</span>
@@ -44,8 +47,8 @@
         </form>
         <form method="POST" action="{{ route('admin.ads.ensure-brand-pages') }}" class="m-0" onsubmit="return confirm('Link all ads to your Facebook Page and Instagram on Meta? This rebuilds creatives if needed and does NOT create new ad ids (metrics stay intact).');">
             @csrf
-            <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-900 shadow-sm transition hover:bg-indigo-100" title="Use META_PAGE_ID + linked Instagram on every ad creative">
-                FB + IG pages
+            <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-900 shadow-sm transition hover:bg-indigo-100" title="Set which Facebook Page and Instagram account name appears on ads. Delivery still goes to your ad set audience worldwide.">
+                FB + IG identity
             </button>
         </form>
         <form method="POST" action="{{ route('admin.ads.enable-instagram-all') }}" class="m-0" onsubmit="return confirm('Enable Instagram on ALL ads? This updates legacy ad sets to Facebook+Instagram only, rebuilds creatives, and creates new Meta ads where needed (old ads paused). Continue?');">

@@ -204,7 +204,7 @@ class InstagramDeliveryService
         $ig = $stats['instagram_user_id'] ?? '—';
 
         return sprintf(
-            'Linked all ads to Facebook Page %s and Instagram %s. %d ad set(s), %d creative(s), %d ad(s) updated on Meta. IG impressions can take hours after new spend.',
+            'All ads now run as Facebook Page %s and Instagram %s. They still deliver to your ad set target audience (you are charged when those people see or click the ad). %d ad set(s), %d creative(s), %d ad(s) updated on Meta.',
             $page,
             $ig,
             (int) ($stats['adsets']['updated'] ?? 0),
