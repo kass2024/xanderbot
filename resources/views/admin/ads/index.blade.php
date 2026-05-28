@@ -92,7 +92,7 @@ ALERTS
 {{-- TABLE: horizontal scroll + sticky Actions column --}}
 <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/5">
     <div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
-        <table class="w-full min-w-[1180px] border-collapse text-left text-sm text-slate-700">
+        <table class="w-full min-w-[1240px] border-collapse text-left text-sm text-slate-700">
 
 <thead>
 <tr class="border-b border-slate-200 bg-slate-50/95 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -102,6 +102,7 @@ ALERTS
 <th class="whitespace-nowrap px-4 py-3 lg:px-5">Delivery</th>
 <th class="min-w-[9rem] whitespace-nowrap px-4 py-3 lg:px-5">Platforms</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Impr.</th>
+<th class="whitespace-nowrap px-4 py-3 text-right tabular-nums text-fuchsia-700 lg:px-5" title="Instagram impressions (Meta)">IG impr.</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Clicks</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">CTR</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Spend</th>
@@ -193,6 +194,10 @@ ALERTS
 
 {{-- IMPRESSIONS --}}
 <td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" id="imp-{{ $ad->id }}">{{ number_format($ad->impressions ?? 0) }}</td>
+
+{{-- IG IMPRESSIONS --}}
+@php $igImpr = (int) (($ad->placement ?? [])['instagram_impressions'] ?? 0); @endphp
+<td class="whitespace-nowrap px-4 py-3 text-right tabular-nums font-medium text-fuchsia-800 lg:px-5" id="ig-imp-{{ $ad->id }}">{{ number_format($igImpr) }}</td>
 
 {{-- CLICKS --}}
 <td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" id="clk-{{ $ad->id }}">{{ number_format($ad->clicks ?? 0) }}</td>
@@ -466,6 +471,7 @@ async function refreshAdsDashboard(){
         data.ads.forEach(ad => {
 
             const imp = document.getElementById('imp-'+ad.id);
+            const igImp = document.getElementById('ig-imp-'+ad.id);
             const clk = document.getElementById('clk-'+ad.id);
             const ctr = document.getElementById('ctr-'+ad.id);
             const spn = document.getElementById('spend-'+ad.id);
@@ -474,6 +480,10 @@ async function refreshAdsDashboard(){
             const plt = document.getElementById('platforms-'+ad.id);
 
             if(imp) imp.textContent = number(ad.impressions);
+            if(igImp) {
+                const ig = ad.instagram_impressions ?? (ad.placement && ad.placement.instagram_impressions) ?? 0;
+                igImp.textContent = number(ig);
+            }
             if(clk) clk.textContent = number(ad.clicks);
             if(ctr) ctr.innerHTML = renderCtr(ad.ctr);
             if(spn) spn.textContent = money(ad.spend);

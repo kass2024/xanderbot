@@ -106,66 +106,156 @@ class AdController extends Controller
         return (float) ($row[$key] ?? 0);
     }
 
+    /**
+     * @return array{impressions: int, clicks: int, spend: float}|null
+     */
+    protected function fetchMetaLifetimeMetrics(Ad $ad): ?array
+    {
+        if (empty($ad->meta_ad_id)) {
+            return null;
+        }
+
+        try {
+            $base = $this->meta->getInsights((string) $ad->meta_ad_id, 'maximum');
+        } catch (Throwable $e) {
+            Log::warning('META_LIFETIME_METRICS_FAILED', [
+                'ad_id' => $ad->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        if ($base === []) {
+            return null;
+        }
+
+        return [
+            'impressions' => (int) ($base['impressions'] ?? 0),
+            'clicks' => (int) ($base['clicks'] ?? 0),
+            'spend' => $this->parseInsightMetric($base, 'spend'),
+        ];
+    }
+
+    /**
+     * Metrics for display — never lower than values already stored locally.
+     *
+     * @param  array{impressions: int, clicks: int, spend: float}|null  $meta
+     * @return array{impressions: int, clicks: int, spend: float, ctr: float, source: string}
+     */
+    protected function mergeMetricsForDisplay(Ad $ad, ?array $meta): array
+    {
+        $impressions = (int) ($ad->impressions ?? 0);
+        $clicks = (int) ($ad->clicks ?? 0);
+        $spend = (float) ($ad->spend ?? 0);
+        $source = 'database';
+
+        if ($meta !== null) {
+            $impressions = max($impressions, (int) $meta['impressions']);
+            $clicks = max($clicks, (int) $meta['clicks']);
+            $spend = max($spend, (float) $meta['spend']);
+            $source = 'meta';
+        }
+
+        $ctr = $impressions > 0
+            ? round(($clicks / $impressions) * 100, 2)
+            : (float) ($ad->ctr ?? 0);
+
+        return [
+            'impressions' => $impressions,
+            'clicks' => $clicks,
+            'spend' => $spend,
+            'ctr' => $ctr,
+            'source' => $source,
+        ];
+    }
+
+    /**
+     * Persist Meta metrics without wiping local totals (e.g. after ad reprovision).
+     *
+     * @param  array<string, mixed>|null  $lifetimeRow
+     * @param  array<string, mixed>|null  $todayRow
+     */
+    protected function persistAdMetricsFromMeta(Ad $ad, ?array $lifetimeRow, ?array $todayRow = null, bool $enforceBudget = true): void
+    {
+        if (! $lifetimeRow && ! $todayRow) {
+            return;
+        }
+
+        $metaImpressions = (int) ($lifetimeRow['impressions'] ?? $todayRow['impressions'] ?? 0);
+        $metaClicks = (int) ($lifetimeRow['clicks'] ?? $todayRow['clicks'] ?? 0);
+        $metaSpend = $this->parseInsightMetric($lifetimeRow ?? [], 'spend');
+        if ($metaSpend <= 0 && $todayRow) {
+            $metaSpend = $this->parseInsightMetric($todayRow, 'spend');
+        }
+
+        $hadLocal = ((int) ($ad->impressions ?? 0)) > 0
+            || ((float) ($ad->spend ?? 0)) > 0.00001;
+        $metaHasActivity = $metaImpressions > 0 || $metaClicks > 0 || $metaSpend > 0.00001;
+
+        if ($hadLocal && ! $metaHasActivity) {
+            return;
+        }
+
+        $impressions = max((int) ($ad->impressions ?? 0), $metaImpressions);
+        $clicks = max((int) ($ad->clicks ?? 0), $metaClicks);
+        $spend = max((float) ($ad->spend ?? 0), $metaSpend);
+        $ctr = $impressions > 0
+            ? round(($clicks / $impressions) * 100, 2)
+            : (float) ($lifetimeRow['ctr'] ?? $todayRow['ctr'] ?? 0);
+
+        $metaTodaySpend = $todayRow
+            ? $this->parseInsightMetric($todayRow, 'spend')
+            : 0;
+
+        $payload = [
+            'impressions' => $impressions,
+            'clicks' => $clicks,
+            'spend' => $spend,
+            'ctr' => $ctr,
+        ];
+
+        if (Schema::hasColumn('ads', 'spend_date')) {
+            $payload = array_merge($payload, AdBudgetGuard::metricsPayloadFromMetaToday($ad, $metaTodaySpend));
+        } elseif (Schema::hasColumn('ads', 'daily_spend')) {
+            $payload['daily_spend'] = AdBudgetGuard::isBudgetLimitPaused($ad)
+                ? 0
+                : AdBudgetGuard::cappedSessionSpend($ad, $metaTodaySpend);
+        }
+
+        $ad->update(AdBudgetGuard::filterPersistablePayload(
+            array_intersect_key($payload, array_flip($ad->getFillable()))
+        ));
+
+        $ad->impressions = $impressions;
+        $ad->clicks = $clicks;
+        $ad->spend = $spend;
+        $ad->ctr = $ctr;
+        $ad->daily_spend = (float) ($payload['daily_spend'] ?? 0);
+        if (isset($payload['spend_date'])) {
+            $ad->spend_date = $payload['spend_date'];
+        }
+        if (isset($payload['daily_spend_anchor'])) {
+            $ad->daily_spend_anchor = (float) $payload['daily_spend_anchor'];
+        }
+
+        AdBudgetGuard::reconcileBudgetLimitPause($ad, $metaTodaySpend);
+
+        if ($enforceBudget) {
+            AdBudgetGuard::enforce($ad, $this->meta, $metaTodaySpend);
+        }
+    }
+
     protected function applyMetaInsightsToAds(iterable $ads, array $lifetime, array $today, bool $enforceBudget = true): void
     {
         foreach ($ads as $ad) {
             $metaId = (string) $ad->meta_ad_id;
-            $lifetimeRow = $lifetime[$metaId] ?? null;
-            $todayRow = $today[$metaId] ?? null;
-
-            if (! $lifetimeRow && ! $todayRow) {
-                continue;
-            }
-
-            $impressions = (int) ($lifetimeRow['impressions'] ?? $todayRow['impressions'] ?? 0);
-            $clicks = (int) ($lifetimeRow['clicks'] ?? $todayRow['clicks'] ?? 0);
-            $spend = $this->parseInsightMetric($lifetimeRow ?? [], 'spend');
-            if ($spend <= 0 && $todayRow) {
-                $spend = $this->parseInsightMetric($todayRow, 'spend');
-            }
-            $ctr = $impressions > 0
-                ? round(($clicks / $impressions) * 100, 2)
-                : (float) ($lifetimeRow['ctr'] ?? $todayRow['ctr'] ?? 0);
-            $metaTodaySpend = $todayRow
-                ? $this->parseInsightMetric($todayRow, 'spend')
-                : 0;
-
-            $payload = [
-                'impressions' => $impressions,
-                'clicks' => $clicks,
-                'spend' => $spend,
-                'ctr' => $ctr,
-            ];
-
-            if (Schema::hasColumn('ads', 'spend_date')) {
-                $payload = array_merge($payload, AdBudgetGuard::metricsPayloadFromMetaToday($ad, $metaTodaySpend));
-            } elseif (Schema::hasColumn('ads', 'daily_spend')) {
-                $payload['daily_spend'] = AdBudgetGuard::isBudgetLimitPaused($ad)
-                    ? 0
-                    : AdBudgetGuard::cappedSessionSpend($ad, $metaTodaySpend);
-            }
-
-            $ad->update(AdBudgetGuard::filterPersistablePayload(
-                array_intersect_key($payload, array_flip($ad->getFillable()))
-            ));
-
-            $ad->impressions = $impressions;
-            $ad->clicks = $clicks;
-            $ad->spend = $spend;
-            $ad->ctr = $ctr;
-            $ad->daily_spend = (float) ($payload['daily_spend'] ?? 0);
-            if (isset($payload['spend_date'])) {
-                $ad->spend_date = $payload['spend_date'];
-            }
-            if (isset($payload['daily_spend_anchor'])) {
-                $ad->daily_spend_anchor = (float) $payload['daily_spend_anchor'];
-            }
-
-            AdBudgetGuard::reconcileBudgetLimitPause($ad, $metaTodaySpend);
-
-            if ($enforceBudget) {
-                AdBudgetGuard::enforce($ad, $this->meta, $metaTodaySpend);
-            }
+            $this->persistAdMetricsFromMeta(
+                $ad,
+                $lifetime[$metaId] ?? null,
+                $today[$metaId] ?? null,
+                $enforceBudget
+            );
         }
     }
 
@@ -273,6 +363,8 @@ class AdController extends Controller
 
     protected function formatAdForLiveJson(Ad $ad): array
     {
+        $placement = $this->buildPlacementPayloadForAd($ad);
+
         return array_merge([
             'id' => $ad->id,
             'name' => $ad->name,
@@ -288,8 +380,9 @@ class AdController extends Controller
             'daily_budget' => (float) ($ad->daily_budget ?? 0),
             'pause_reason' => $ad->pause_reason ?? null,
             'enable_instagram_url' => route('admin.ads.enable-instagram', $ad),
+            'instagram_impressions' => (int) ($placement['instagram_impressions'] ?? 0),
         ], [
-            'placement' => $this->buildPlacementPayloadForAd($ad),
+            'placement' => $placement,
         ]);
     }
 
@@ -631,237 +724,113 @@ $ad = Ad::create([
     |--------------------------------------------------------------------------
     */
     public function preview(Ad $ad): View
-{
-    $ad->load([
-        'creative',
-        'adSet',
-        'adSet.campaign'
-    ]);
+    {
+        $ad->load(['creative', 'adSet', 'adSet.campaign']);
 
-    $audience = [
-        'countries' => [],
-        'age' => [],
-        'gender' => []
-    ];
+        $metrics = $this->mergeMetricsForDisplay($ad, null);
+        $audience = ['countries' => [], 'age' => [], 'gender' => []];
+        $devices = [];
+        $placementRows = [];
+        $insightsError = null;
+        $refreshedAt = now();
 
-    $devices = [];
-    $placements = [];
+        if (! empty($ad->meta_ad_id)) {
+            try {
+                $metrics = $this->mergeMetricsForDisplay($ad, $this->fetchMetaLifetimeMetrics($ad));
 
-    try {
+                foreach ($this->meta->getInsights((string) $ad->meta_ad_id, 'maximum', ['breakdowns' => 'country']) as $row) {
+                    $country = $row['country'] ?? 'Unknown';
+                    $audience['countries'][$country] = ($audience['countries'][$country] ?? 0) + (int) ($row['impressions'] ?? 0);
+                }
 
-        if (!$ad->meta_ad_id) {
-            throw new Exception('Ad not synced with Meta.');
-        }
+                foreach ($this->meta->getInsights((string) $ad->meta_ad_id, 'maximum', ['breakdowns' => 'age,gender']) as $row) {
+                    if (! empty($row['age'])) {
+                        $age = $row['age'];
+                        $audience['age'][$age] = ($audience['age'][$age] ?? 0) + (int) ($row['impressions'] ?? 0);
+                    }
+                    if (! empty($row['gender'])) {
+                        $gender = $row['gender'];
+                        $audience['gender'][$gender] = ($audience['gender'][$gender] ?? 0) + (int) ($row['impressions'] ?? 0);
+                    }
+                }
 
-        /*
-        |--------------------------------------------------------------------------
-        | BASIC INSIGHTS
-        |--------------------------------------------------------------------------
-        */
+                foreach ($this->meta->getInsights((string) $ad->meta_ad_id, 'maximum', ['breakdowns' => 'device_platform']) as $row) {
+                    $device = $row['device_platform'] ?? 'Unknown';
+                    $devices[$device] = [
+                        'device' => $device,
+                        'impressions' => ($devices[$device]['impressions'] ?? 0) + (int) ($row['impressions'] ?? 0),
+                        'clicks' => ($devices[$device]['clicks'] ?? 0) + (int) ($row['clicks'] ?? 0),
+                    ];
+                }
 
-        $base = $this->meta->getInsights($ad->meta_ad_id,'maximum');
+                foreach ($this->meta->getAdPlatformBreakdown((string) $ad->meta_ad_id, 'maximum') as $row) {
+                    $platform = $row['publisher_platform'] ?? 'unknown';
+                    $placementRows[] = [
+                        'placement' => ucfirst(str_replace('_', ' ', (string) $platform)),
+                        'platform_key' => $platform,
+                        'impressions' => (int) ($row['impressions'] ?? 0),
+                        'clicks' => (int) ($row['clicks'] ?? 0),
+                        'spend' => (float) ($row['spend'] ?? 0),
+                    ];
+                }
 
-        if (!empty($base)) {
-
-            $impressions = (int) ($base['impressions'] ?? 0);
-            $clicks      = (int) ($base['clicks'] ?? 0);
-            $spend       = (float) ($base['spend'] ?? 0);
-
-            $ctr = $impressions > 0
-                ? round(($clicks / $impressions) * 100, 2)
-                : 0;
-
-            $ad->update([
-                'impressions' => $impressions,
-                'clicks'      => $clicks,
-                'spend'       => $spend,
-                'ctr'         => $ctr
-            ]);
-        }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | COUNTRY BREAKDOWN
-        |--------------------------------------------------------------------------
-        */
-
-        $countries = $this->meta->getInsights(
-            $ad->meta_ad_id,
-            'maximum',
-            ['breakdowns' => 'country']
-        );
-
-        foreach ($countries as $row) {
-
-            $country = $row['country'] ?? 'Unknown';
-
-            $audience['countries'][$country] =
-                ($audience['countries'][$country] ?? 0)
-                + (int)($row['impressions'] ?? 0);
-        }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | AGE + GENDER BREAKDOWN
-        |--------------------------------------------------------------------------
-        */
-
-        $ages = $this->meta->getInsights(
-            $ad->meta_ad_id,
-            'maximum',
-            ['breakdowns' => 'age,gender']
-        );
-
-        foreach ($ages as $row) {
-
-            if (!empty($row['age'])) {
-
-                $age = $row['age'];
-
-                $audience['age'][$age] =
-                    ($audience['age'][$age] ?? 0)
-                    + (int)($row['impressions'] ?? 0);
+                arsort($audience['countries']);
+                arsort($audience['age']);
+                arsort($audience['gender']);
+            } catch (Throwable $e) {
+                $insightsError = $e->getMessage();
+                Log::warning('AD_INSIGHTS_PREVIEW_FETCH_FAILED', [
+                    'ad_id' => $ad->id,
+                    'meta_ad_id' => $ad->meta_ad_id,
+                    'error' => $e->getMessage(),
+                ]);
             }
+        } else {
+            $insightsError = 'Ad is not synced with Meta.';
+        }
 
-            if (!empty($row['gender'])) {
-
-                $gender = $row['gender'];
-
-                $audience['gender'][$gender] =
-                    ($audience['gender'][$gender] ?? 0)
-                    + (int)($row['impressions'] ?? 0);
+        $placementDelivery = [];
+        if (! empty($ad->meta_ad_id)) {
+            try {
+                $accountId = $this->resolveMetaAccountIdForAd($ad);
+                if ($accountId) {
+                    $map = $this->meta->getAdPlacementInsightsMap($accountId, 'maximum');
+                    $placementDelivery = $map[(string) $ad->meta_ad_id] ?? [];
+                }
+            } catch (Throwable $e) {
+                Log::warning('PREVIEW_PLACEMENT_FETCH_FAILED', ['error' => $e->getMessage()]);
             }
         }
 
+        $igDelivery = $this->instagramDelivery->auditAdDelivery($ad, $placementDelivery, false, true);
 
-        /*
-        |--------------------------------------------------------------------------
-        | DEVICE BREAKDOWN
-        |--------------------------------------------------------------------------
-        */
-
-        $deviceRows = $this->meta->getInsights(
-            $ad->meta_ad_id,
-            'maximum',
-            ['breakdowns' => 'device_platform']
-        );
-
-        foreach ($deviceRows as $row) {
-
-            $device = $row['device_platform'] ?? 'Unknown';
-
-            $devices[$device] = [
-
-                'device' => $device,
-
-                'impressions' =>
-                    ($devices[$device]['impressions'] ?? 0)
-                    + (int)($row['impressions'] ?? 0),
-
-                'clicks' =>
-                    ($devices[$device]['clicks'] ?? 0)
-                    + (int)($row['clicks'] ?? 0)
-            ];
+        if ($placementRows === []) {
+            foreach (['facebook', 'instagram', 'messenger', 'audience_network'] as $platform) {
+                if (! isset($placementDelivery[$platform])) {
+                    continue;
+                }
+                $row = $placementDelivery[$platform];
+                $placementRows[] = [
+                    'placement' => ucfirst(str_replace('_', ' ', $platform)),
+                    'platform_key' => $platform,
+                    'impressions' => (int) ($row['impressions'] ?? 0),
+                    'clicks' => (int) ($row['clicks'] ?? 0),
+                    'spend' => (float) ($row['spend'] ?? 0),
+                ];
+            }
         }
 
-
-        /*
-        |--------------------------------------------------------------------------
-        | PLACEMENT BREAKDOWN
-        |--------------------------------------------------------------------------
-        */
-
-        $placementRows = $this->meta->getInsights(
-            $ad->meta_ad_id,
-            'maximum',
-            ['breakdowns' => 'publisher_platform']
-        );
-
-        foreach ($placementRows as $row) {
-
-            $placement = $row['publisher_platform'] ?? 'Unknown';
-
-            $placements[$placement] = [
-
-                'placement' => $placement,
-
-                'impressions' =>
-                    ($placements[$placement]['impressions'] ?? 0)
-                    + (int)($row['impressions'] ?? 0),
-
-                'clicks' =>
-                    ($placements[$placement]['clicks'] ?? 0)
-                    + (int)($row['clicks'] ?? 0)
-            ];
-        }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | SORT DATA FOR DASHBOARD
-        |--------------------------------------------------------------------------
-        */
-
-        arsort($audience['countries']);
-        arsort($audience['age']);
-        arsort($audience['gender']);
-
-    }
-
-    catch (Throwable $e) {
-
-        Log::error('AD_INSIGHTS_PREVIEW_FAILED', [
-
-            'ad_id' => $ad->id,
-            'meta_ad_id' => $ad->meta_ad_id,
-            'error' => $e->getMessage()
-
+        return view('admin.ads.preview', [
+            'ad' => $ad,
+            'metrics' => $metrics,
+            'audience' => $audience,
+            'devices' => array_values($devices),
+            'placements' => $placementRows,
+            'igDelivery' => $igDelivery,
+            'insightsError' => $insightsError,
+            'refreshedAt' => $refreshedAt,
         ]);
     }
-
-    $placementDelivery = [];
-    if (! empty($ad->meta_ad_id)) {
-        try {
-            $accountId = $this->resolveMetaAccountIdForAd($ad);
-            if ($accountId) {
-                $map = $this->meta->getAdPlacementInsightsMap($accountId, 'maximum');
-                $placementDelivery = $map[(string) $ad->meta_ad_id] ?? [];
-            }
-        } catch (Throwable $e) {
-            Log::warning('PREVIEW_PLACEMENT_FETCH_FAILED', ['error' => $e->getMessage()]);
-        }
-    }
-
-    $igDelivery = $this->instagramDelivery->auditAdDelivery($ad, $placementDelivery, true);
-
-    $placementRows = [];
-    foreach (['facebook', 'instagram', 'messenger', 'audience_network'] as $platform) {
-        if (! isset($placementDelivery[$platform])) {
-            continue;
-        }
-        $row = $placementDelivery[$platform];
-        $placementRows[] = [
-            'placement' => ucfirst(str_replace('_', ' ', $platform)),
-            'platform_key' => $platform,
-            'impressions' => (int) ($row['impressions'] ?? 0),
-            'clicks' => (int) ($row['clicks'] ?? 0),
-            'spend' => (float) ($row['spend'] ?? 0),
-        ];
-    }
-    if ($placementRows === [] && $placements !== []) {
-        $placementRows = array_values($placements);
-    }
-
-    return view('admin.ads.preview', [
-        'ad' => $ad,
-        'audience' => $audience,
-        'devices' => array_values($devices),
-        'placements' => $placementRows,
-        'igDelivery' => $igDelivery,
-    ]);
-}
 /*
 |--------------------------------------------------------------------------
 | UPDATE STATUS
@@ -1208,35 +1177,26 @@ public function sync(Ad $ad): RedirectResponse
 
     try {
 
-        $insights = $this->meta->getInsights($ad->meta_ad_id);
-
-        $impressions = 0;
-        $clicks = 0;
-        $spend = 0;
-
-        if (!empty($insights['data'][0])) {
-
-            $row = $insights['data'][0];
-
-            $impressions = (int) ($row['impressions'] ?? 0);
-            $clicks = (int) ($row['clicks'] ?? 0);
-            $spend = (float) ($row['spend'] ?? 0);
+        $lifetime = $this->fetchMetaLifetimeMetrics($ad);
+        $todayMap = [];
+        $accountId = $this->resolveMetaAccountIdForAd($ad);
+        if ($accountId) {
+            $todayMap = $this->meta->getAdInsightsMap($accountId, 'today');
         }
 
-        $ctr = $impressions > 0
-            ? round(($clicks / $impressions) * 100, 2)
-            : 0;
+        $this->persistAdMetricsFromMeta(
+            $ad,
+            $lifetime ? [
+                'impressions' => $lifetime['impressions'],
+                'clicks' => $lifetime['clicks'],
+                'spend' => $lifetime['spend'],
+            ] : null,
+            $todayMap[(string) $ad->meta_ad_id] ?? null
+        );
 
-        $ad->update([
+        $ad->refresh();
 
-            'impressions' => $impressions,
-            'clicks' => $clicks,
-            'spend' => $spend,
-            'ctr' => $ctr
-
-        ]);
-
-        return back()->with('success','Ad metrics refreshed.');
+        return back()->with('success', 'Ad metrics refreshed from Meta (stored totals are never reduced to zero).');
 
     }
 

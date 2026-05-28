@@ -5,14 +5,12 @@
 @php
     $ig = $igDelivery ?? [];
     $igStatus = $ig['status'] ?? 'not_configured';
+    $m = $metrics ?? ['impressions' => 0, 'clicks' => 0, 'spend' => 0, 'ctr' => 0, 'source' => 'database'];
     $statusBadge = match ($igStatus) {
         'live' => 'bg-fuchsia-100 text-fuchsia-800',
         'enabled' => 'bg-emerald-100 text-emerald-800',
         'pending' => 'bg-amber-100 text-amber-800',
         default => 'bg-slate-100 text-slate-700',
-    };
-    $redactToken = static function (string $cmd): string {
-        return preg_replace('/access_token=[^&"\']+/i', 'access_token=REDACTED', $cmd) ?? $cmd;
     };
 @endphp
 
@@ -24,6 +22,9 @@
         <p class="text-sm text-gray-500 mt-1">{{ $ad->name }}</p>
         @if($ad->meta_ad_id)
             <p class="text-xs text-gray-400 mt-1 font-mono">Meta ad {{ $ad->meta_ad_id }}</p>
+        @endif
+        @if(isset($refreshedAt))
+            <p class="text-xs text-gray-400 mt-2">Live from Meta · {{ $refreshedAt->format('g:i:s A') }}</p>
         @endif
     </div>
     <div class="flex flex-wrap gap-2">
@@ -37,8 +38,15 @@
     </div>
 </div>
 
-{{-- Instagram delivery (primary clarity block) --}}
-<div class="bg-white rounded-2xl shadow border p-6 space-y-5">
+@if(!empty($insightsError))
+    <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        Could not load all breakdowns from Meta. Totals below use the higher of saved data and Meta lifetime.
+        <span class="block text-xs text-amber-700 mt-1">{{ $insightsError }}</span>
+    </div>
+@endif
+
+{{-- Instagram delivery --}}
+<div class="bg-white rounded-2xl shadow border p-6 space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
         <h2 class="text-lg font-semibold text-gray-900">Instagram delivery</h2>
         <span class="text-xs font-semibold px-3 py-1 rounded-full {{ $statusBadge }}">
@@ -46,63 +54,32 @@
         </span>
     </div>
 
-    <p class="text-sm text-gray-600">
-        <strong>IG enabled</strong> means Meta has the ad set, creative, and ad configured for Instagram.
-        <strong>IG live</strong> means Meta insights show Instagram impressions — this can lag by hours after enabling.
-    </p>
-
     @if(!empty($ig['delivery_warning']))
         <div class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-900">
             {{ $ig['delivery_warning'] }}
         </div>
     @endif
 
-    <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-4 text-sm">
+    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
         <div class="rounded-xl bg-gray-50 p-4">
             <p class="text-xs text-gray-500">Facebook impressions</p>
             <p class="text-xl font-bold tabular-nums">{{ number_format($ig['facebook_impressions'] ?? 0) }}</p>
             <p class="text-xs text-gray-500">${{ number_format($ig['facebook_spend'] ?? 0, 2) }} spend</p>
         </div>
-        <div class="rounded-xl bg-gray-50 p-4">
-            <p class="text-xs text-gray-500">Instagram impressions</p>
-            <p class="text-xl font-bold tabular-nums text-fuchsia-700">{{ number_format($ig['instagram_impressions'] ?? 0) }}</p>
-            <p class="text-xs text-gray-500">${{ number_format($ig['instagram_spend'] ?? 0, 2) }} spend</p>
+        <div class="rounded-xl bg-fuchsia-50/60 p-4 ring-1 ring-fuchsia-100">
+            <p class="text-xs text-fuchsia-700">Instagram impressions</p>
+            <p class="text-xl font-bold tabular-nums text-fuchsia-800">{{ number_format($ig['instagram_impressions'] ?? 0) }}</p>
+            <p class="text-xs text-fuchsia-600">${{ number_format($ig['instagram_spend'] ?? 0, 2) }} spend</p>
         </div>
         <div class="rounded-xl bg-gray-50 p-4">
-            <p class="text-xs text-gray-500">instagram_user_id</p>
-            <p class="font-mono text-xs break-all">{{ $ig['instagram_user_id'] ?? '—' }}</p>
+            <p class="text-xs text-gray-500">IG enabled</p>
+            <p class="text-sm font-medium">{{ $ig['instagram_enabled_at'] ? \Carbon\Carbon::parse($ig['instagram_enabled_at'])->format('M j, Y') : 'Not yet' }}</p>
         </div>
         <div class="rounded-xl bg-gray-50 p-4">
-            <p class="text-xs text-gray-500">Audience Network impr.</p>
-            <p class="text-xl font-bold tabular-nums text-amber-700">{{ number_format($ig['audience_network_impressions'] ?? 0) }}</p>
-            <p class="text-xs text-gray-500">Not Facebook/Instagram</p>
-        </div>
-        <div class="rounded-xl bg-gray-50 p-4">
-            <p class="text-xs text-gray-500">Enabled at (local)</p>
-            <p class="text-sm font-medium">{{ $ig['instagram_enabled_at'] ? \Carbon\Carbon::parse($ig['instagram_enabled_at'])->format('M j, Y g:i A') : '—' }}</p>
+            <p class="text-xs text-gray-500">Ad set targets</p>
+            <p class="text-sm font-medium">{{ !empty($ig['targets']) ? implode(', ', $ig['targets']) : '—' }}</p>
         </div>
     </div>
-
-    <div>
-        <h3 class="text-sm font-semibold text-gray-800 mb-2">Configuration checklist</h3>
-        <ul class="space-y-1 text-sm">
-            @foreach($ig['checks'] ?? [] as $check)
-                <li class="{{ ($check['ok'] ?? false) ? 'text-emerald-700' : 'text-amber-800' }}">
-                    {{ ($check['ok'] ?? false) ? '✓' : '✗' }} {{ $check['label'] }}
-                    @if(!empty($check['note']))
-                        <span class="text-gray-500">({{ $check['note'] }})</span>
-                    @endif
-                </li>
-            @endforeach
-        </ul>
-        @if(!empty($ig['meta_creative_error']))
-            <p class="text-xs text-red-600 mt-2">Meta creative check: {{ $ig['meta_creative_error'] }}</p>
-        @endif
-    </div>
-
-    @if(!empty($ig['targets']))
-        <p class="text-xs text-gray-500">Ad set targets: {{ implode(', ', $ig['targets']) }}</p>
-    @endif
 </div>
 
 {{-- Ad summary --}}
@@ -131,36 +108,29 @@
     </div>
 </div>
 
-{{-- Performance KPIs --}}
+{{-- Performance KPIs (read-only; never overwrites DB on this page) --}}
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
     <div class="bg-white border rounded-2xl shadow p-5">
         <p class="text-xs text-gray-500">Impressions</p>
-        <p class="text-2xl font-bold">{{ number_format($ad->impressions ?? 0) }}</p>
+        <p class="text-2xl font-bold tabular-nums">{{ number_format($m['impressions']) }}</p>
     </div>
     <div class="bg-white border rounded-2xl shadow p-5">
         <p class="text-xs text-gray-500">Clicks</p>
-        <p class="text-2xl font-bold text-blue-600">{{ number_format($ad->clicks ?? 0) }}</p>
+        <p class="text-2xl font-bold text-blue-600 tabular-nums">{{ number_format($m['clicks']) }}</p>
     </div>
     <div class="bg-white border rounded-2xl shadow p-5">
         <p class="text-xs text-gray-500">CTR</p>
-        <p class="text-2xl font-bold text-purple-600">
-            @if(($ad->impressions ?? 0) > 0)
-                {{ round(($ad->clicks / $ad->impressions) * 100, 2) }}%
-            @else
-                0%
-            @endif
-        </p>
+        <p class="text-2xl font-bold text-purple-600">{{ number_format($m['ctr'], 2) }}%</p>
     </div>
     <div class="bg-white border rounded-2xl shadow p-5">
         <p class="text-xs text-gray-500">Spend</p>
-        <p class="text-2xl font-bold text-green-600">${{ number_format($ad->spend ?? 0, 2) }}</p>
+        <p class="text-2xl font-bold text-green-600 tabular-nums">${{ number_format($m['spend'], 2) }}</p>
     </div>
 </div>
 
 <div class="grid lg:grid-cols-2 gap-6">
-    {{-- Platform breakdown --}}
     <div class="bg-white border rounded-2xl shadow p-6">
-        <h2 class="text-lg font-semibold mb-4">Delivery by platform (Meta)</h2>
+        <h2 class="text-lg font-semibold mb-4">Delivery by platform</h2>
         <table class="w-full text-sm">
             <thead class="text-gray-500 border-b">
                 <tr>
@@ -172,8 +142,8 @@
             </thead>
             <tbody class="divide-y">
                 @forelse($placements ?? [] as $row)
-                    <tr>
-                        <td class="py-2 capitalize">{{ $row['placement'] ?? '—' }}</td>
+                    <tr class="{{ ($row['platform_key'] ?? '') === 'instagram' ? 'bg-fuchsia-50/40' : '' }}">
+                        <td class="py-2 capitalize font-medium">{{ $row['placement'] ?? '—' }}</td>
                         <td class="text-right tabular-nums">{{ number_format($row['impressions'] ?? 0) }}</td>
                         <td class="text-right tabular-nums">{{ number_format($row['clicks'] ?? 0) }}</td>
                         <td class="text-right tabular-nums">${{ number_format($row['spend'] ?? 0, 2) }}</td>
@@ -185,15 +155,14 @@
         </table>
     </div>
 
-    {{-- Cost metrics --}}
     <div class="bg-white border rounded-2xl shadow p-6">
         <h2 class="text-lg font-semibold mb-4">Cost metrics</h2>
         <dl class="space-y-3 text-sm">
             <div class="flex justify-between">
                 <dt class="text-gray-500">CPC</dt>
                 <dd class="font-semibold">
-                    @if(($ad->clicks ?? 0) > 0)
-                        ${{ number_format($ad->spend / $ad->clicks, 2) }}
+                    @if($m['clicks'] > 0)
+                        ${{ number_format($m['spend'] / $m['clicks'], 2) }}
                     @else
                         —
                     @endif
@@ -202,8 +171,8 @@
             <div class="flex justify-between">
                 <dt class="text-gray-500">CPM</dt>
                 <dd class="font-semibold">
-                    @if(($ad->impressions ?? 0) > 0)
-                        ${{ number_format(($ad->spend / $ad->impressions) * 1000, 2) }}
+                    @if($m['impressions'] > 0)
+                        ${{ number_format(($m['spend'] / $m['impressions']) * 1000, 2) }}
                     @else
                         —
                     @endif
@@ -212,18 +181,17 @@
         </dl>
         <div class="mt-4 space-y-1 text-sm">
             @if($ad->status === 'ACTIVE')
-                <div class="text-green-600">✓ Ad is active on Meta</div>
+                <div class="text-green-600">Ad is active on Meta</div>
             @else
-                <div class="text-amber-600">⚠ Ad is not active</div>
+                <div class="text-amber-600">Ad is not active</div>
             @endif
             @if(($ad->daily_spend ?? 0) >= ($ad->daily_budget ?? 0) && ($ad->daily_budget ?? 0) > 0)
-                <div class="text-red-600">⚠ Daily budget reached</div>
+                <div class="text-red-600">Daily budget reached</div>
             @endif
         </div>
     </div>
 </div>
 
-{{-- Audience + devices --}}
 <div class="grid lg:grid-cols-2 gap-6">
     <div class="bg-white border rounded-2xl shadow p-6">
         <h2 class="text-lg font-semibold mb-4">Audience</h2>
@@ -238,15 +206,19 @@
             </div>
             <div>
                 <h3 class="font-semibold mb-2">Age</h3>
-                @foreach($audience['age'] ?? [] as $age => $impressions)
+                @forelse($audience['age'] ?? [] as $age => $impressions)
                     <div class="flex justify-between"><span>{{ $age }}</span><span>{{ number_format($impressions) }}</span></div>
-                @endforeach
+                @empty
+                    <p class="text-gray-400">No data</p>
+                @endforelse
             </div>
             <div>
                 <h3 class="font-semibold mb-2">Gender</h3>
-                @foreach($audience['gender'] ?? [] as $gender => $impressions)
+                @forelse($audience['gender'] ?? [] as $gender => $impressions)
                     <div class="flex justify-between"><span>{{ ucfirst($gender) }}</span><span>{{ number_format($impressions) }}</span></div>
-                @endforeach
+                @empty
+                    <p class="text-gray-400">No data</p>
+                @endforelse
             </div>
         </div>
     </div>
@@ -261,8 +233,8 @@
                 @forelse($devices ?? [] as $device)
                     <tr>
                         <td class="py-2">{{ $device['device'] }}</td>
-                        <td class="text-right">{{ number_format($device['impressions']) }}</td>
-                        <td class="text-right">{{ number_format($device['clicks']) }}</td>
+                        <td class="text-right tabular-nums">{{ number_format($device['impressions']) }}</td>
+                        <td class="text-right tabular-nums">{{ number_format($device['clicks']) }}</td>
                     </tr>
                 @empty
                     <tr><td colspan="3" class="text-center text-gray-400 py-4">No device data</td></tr>
@@ -270,20 +242,6 @@
             </tbody>
         </table>
     </div>
-</div>
-
-{{-- Curl debug (server) --}}
-<div class="bg-slate-900 rounded-2xl shadow p-6 text-slate-100">
-    <h2 class="text-lg font-semibold mb-2">Debug with curl (run on server)</h2>
-    <p class="text-xs text-slate-400 mb-4">
-        Or run: <code class="bg-slate-800 px-1 rounded">php artisan meta:debug-ad-ig {{ $ad->id }} --run</code>
-    </p>
-    @foreach($ig['curl_commands'] ?? [] as $block)
-        <div class="mb-4">
-            <p class="text-xs text-fuchsia-300 mb-1">{{ $block['title'] }}</p>
-            <pre class="text-xs overflow-x-auto bg-slate-800 p-3 rounded-lg whitespace-pre-wrap break-all">{{ $redactToken($block['command']) }}</pre>
-        </div>
-    @endforeach
 </div>
 
 @if($ad->creative)

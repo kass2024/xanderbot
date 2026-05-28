@@ -663,7 +663,7 @@ class InstagramDeliveryService
      * @param  array<string, array<string, mixed>>  $placementDelivery
      * @return array<string, mixed>
      */
-    public function auditAdDelivery(Ad $ad, array $placementDelivery = [], bool $verifyMetaLive = false): array
+    public function auditAdDelivery(Ad $ad, array $placementDelivery = [], bool $verifyMetaLive = false, bool $forUi = false): array
     {
         $ad->loadMissing(['adSet.campaign.adAccount']);
 
@@ -783,7 +783,7 @@ class InstagramDeliveryService
                 ['ok' => $metaCreativeHasIg === true, 'label' => 'Meta ad creative has instagram_user_id', 'note' => $metaCreativeHasIg === null ? 'Could not verify live' : null],
                 ['ok' => $igImpressions > 0, 'label' => 'Instagram impressions from Meta insights'],
             ],
-            'curl_commands' => $this->buildCurlDebugCommands($ad),
+            'curl_commands' => $forUi ? [] : $this->buildCurlDebugCommands($ad),
         ];
     }
 
