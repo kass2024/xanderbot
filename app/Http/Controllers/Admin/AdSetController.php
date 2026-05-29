@@ -134,7 +134,11 @@ class AdSetController extends Controller
 
             'age_max' => 'required|integer|min:18|max:65',
 
+            'geo_mode' => 'required|in:countries_only,countries_and_cities',
+
             'countries' => 'required|array|min:1',
+
+            'cities_json' => 'nullable|string',
 
             'genders' => 'nullable|array',
 
@@ -245,80 +249,10 @@ class AdSetController extends Controller
             |--------------------------------------------------------------------------
             */
 
-          $targeting = [
+            $targeting = $this->buildAdSetTargeting($data);
 
-    'geo_locations' => [
-        'countries' => array_values($data['countries'])
-    ],
-
-    'age_min' => (int)$data['age_min'],
-
-    'age_max' => (int)$data['age_max'],
-
-];
-            if (!empty($data['genders'])) {
-
-                $targeting['genders'] =
-                    array_map('intval', $data['genders']);
-            }
-
-            /*
-            |--------------------------------------------------------------------------
-            | INTERESTS
-            |--------------------------------------------------------------------------
-            */
-
-            if (!empty($data['interests'])) {
-
-                $interestList = [];
-
-                foreach ($data['interests'] as $interestId) {
-
-                    $interestList[] = [
-                        'id' => (string)$interestId
-                    ];
-                }
-
-                $targeting['flexible_spec'] = [
-                    [
-                        'interests' => $interestList
-                    ]
-                ];
-            }
-
-       /*
-|--------------------------------------------------------------------------
-| LANGUAGES (store locally only - do NOT send to Meta)
-|--------------------------------------------------------------------------
-*/
-
-$languages = [];
-
-if (!empty($data['languages'])) {
-
-    $languages = array_map('intval', $data['languages']);
-
-}
-            /*
-            |--------------------------------------------------------------------------
-            | PLACEMENTS
-            |--------------------------------------------------------------------------
-            */
-
-            if ($data['placement_type'] === 'manual') {
-
-                if (empty($data['publisher_platforms'])) {
-                    throw new Exception('Select at least one placement');
-                }
-
-                $targeting['publisher_platforms'] = array_values(array_diff(
-                    $data['publisher_platforms'],
-                    ['audience_network', 'messenger']
-                ));
-            }
-
-            // Always FB + Instagram only (new ads must not include Audience Network).
-            $targeting = $this->meta->targetingWithFacebookAndInstagram($targeting);
+            $languages = array_map('intval', $data['languages'] ?? []);
+            unset($targeting['locales']);
 
             /*
             |--------------------------------------------------------------------------
@@ -648,8 +582,20 @@ public function edit(AdSet $adset)
         ? $rawTargeting
         : json_decode($rawTargeting ?? '{}', true);
 
-    $adset->countries =
-        $targeting['geo_locations']['countries'] ?? [];
+    $adset->countries = array_values(array_unique(array_merge(
+        $targeting['geo_locations']['countries'] ?? [],
+        collect($targeting['geo_locations']['cities'] ?? [])
+            ->map(fn ($city) => is_array($city) ? strtoupper((string) ($city['country'] ?? '')) : '')
+            ->filter()
+            ->all()
+    )));
+
+    $adset->cities =
+        $targeting['geo_locations']['cities'] ?? [];
+
+    $adset->geo_mode = ! empty($adset->cities)
+        ? 'countries_and_cities'
+        : 'countries_only';
 
     $adset->age_min =
         $targeting['age_min'] ?? 18;
@@ -723,7 +669,10 @@ public function update(Request $request, AdSet $adset)
         'age_min' => 'required|integer|min:18|max:65',
         'age_max' => 'required|integer|min:18|max:65',
 
+        'geo_mode' => 'required|in:countries_only,countries_and_cities',
+
         'countries' => 'required|array|min:1',
+        'cities_json' => 'nullable|string',
         'genders' => 'nullable|array',
         'languages' => 'nullable|array',
         'interests' => 'nullable|array|max:5',
@@ -743,74 +692,19 @@ public function update(Request $request, AdSet $adset)
 
         /*
         |--------------------------------------------------------------------------
-        | Rebuild Targeting (LOCAL STORAGE ONLY)
+        | Rebuild Targeting
         |--------------------------------------------------------------------------
         */
 
-        $targeting = [
+        $targeting = $this->buildAdSetTargeting($data);
+        $languages = array_map('intval', $data['languages'] ?? []);
 
-            'geo_locations' => [
-                'countries' => array_values($data['countries'])
-            ],
-
-            'age_min' => (int)$data['age_min'],
-            'age_max' => (int)$data['age_max']
-        ];
-
-        if (!empty($data['genders'])) {
-
-            $targeting['genders'] =
-                array_map('intval', $data['genders']);
-        }
-
-        if (!empty($data['languages'])) {
-
-            $targeting['locales'] =
-                array_map('intval', $data['languages']);
-        }
+        $metaTargeting = $targeting;
+        unset($metaTargeting['locales']);
 
         /*
         |--------------------------------------------------------------------------
-        | Interests
-        |--------------------------------------------------------------------------
-        */
-
-        if (!empty($data['interests'])) {
-
-            $interestList = [];
-
-            foreach ($data['interests'] as $interestId) {
-
-                $interestList[] = [
-                    'id' => (string)$interestId
-                ];
-            }
-
-            $targeting['flexible_spec'] = [
-                [
-                    'interests' => $interestList
-                ]
-            ];
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Placements
-        |--------------------------------------------------------------------------
-        */
-
-        if ($data['placement_type'] === 'manual') {
-            $targeting['publisher_platforms'] = array_values(array_diff(
-                $data['publisher_platforms'] ?? [],
-                ['audience_network', 'messenger']
-            ));
-        }
-
-        $targeting = $this->meta->targetingWithFacebookAndInstagram($targeting);
-
-        /*
-        |--------------------------------------------------------------------------
-        | UPDATE META (SAFE FIELDS ONLY)
+        | UPDATE META (including targeting so delivery matches local settings)
         |--------------------------------------------------------------------------
         */
 
@@ -822,7 +716,9 @@ public function update(Request $request, AdSet $adset)
 
                 'daily_budget' => (int)$data['daily_budget'] * 100,
 
-                'status' => $data['status']
+                'status' => $data['status'],
+
+                'targeting' => $metaTargeting,
             ];
 
             Log::info('META_ADSET_UPDATE_PAYLOAD', [
@@ -850,7 +746,9 @@ public function update(Request $request, AdSet $adset)
 
             'status' => $data['status'],
 
-            'targeting' => $targeting
+            'targeting' => array_merge($targeting, [
+                'locales' => $languages,
+            ]),
         ]);
 
         return redirect()
@@ -876,4 +774,71 @@ public function update(Request $request, AdSet $adset)
             ]);
     }
 }
+
+    /**
+     * Build a Meta-compatible targeting spec from validated form data.
+     */
+    private function buildAdSetTargeting(array $data): array
+    {
+        $cities = [];
+
+        if (($data['geo_mode'] ?? 'countries_only') === 'countries_and_cities'
+            && ! empty($data['cities_json'])) {
+            $decoded = json_decode($data['cities_json'], true);
+
+            if (is_array($decoded)) {
+                $cities = $decoded;
+            }
+        }
+
+        $targeting = [
+            'geo_locations' => $this->meta->buildGeoLocations(
+                $data['countries'],
+                $cities
+            ),
+            'age_min' => (int) $data['age_min'],
+            'age_max' => (int) $data['age_max'],
+        ];
+
+        if (! empty($data['genders'])) {
+            $targeting['genders'] = array_map('intval', $data['genders']);
+        }
+
+        if (! empty($data['languages'])) {
+            $targeting['locales'] = array_map('intval', $data['languages']);
+        }
+
+        if (! empty($data['interests'])) {
+            $interestList = [];
+
+            foreach ($data['interests'] as $interestId) {
+                $interestList[] = [
+                    'id' => (string) $interestId,
+                ];
+            }
+
+            $targeting['flexible_spec'] = [[
+                'interests' => $interestList,
+            ]];
+        }
+
+        if (($data['placement_type'] ?? 'automatic') === 'manual') {
+            if (empty($data['publisher_platforms'])) {
+                throw new Exception('Select at least one placement');
+            }
+
+            $targeting['publisher_platforms'] = array_values(array_diff(
+                $data['publisher_platforms'],
+                ['audience_network', 'messenger']
+            ));
+
+            if (! empty($targeting['publisher_platforms'])) {
+                $targeting = $this->meta->enrichPlacementsForTargeting($targeting);
+            }
+        } else {
+            $targeting = $this->meta->targetingWithFacebookAndInstagram($targeting);
+        }
+
+        return $targeting;
+    }
 }

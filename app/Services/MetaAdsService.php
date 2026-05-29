@@ -787,6 +787,177 @@ protected function handleError($response, $endpoint, $payload = [])
     |--------------------------------------------------------------------------
     */
 
+    /**
+     * Build geo_locations from country codes and optional city entries.
+     * Countries with selected cities are targeted at city level only.
+     */
+    public function buildGeoLocations(array $selectedCountries, array $selectedCities = []): array
+    {
+        $countries = array_values(array_unique(array_map(
+            fn ($code) => strtoupper(trim((string) $code)),
+            $selectedCountries
+        )));
+
+        if ($countries === []) {
+            throw new Exception('At least one country is required.');
+        }
+
+        $citiesByCountry = [];
+
+        foreach ($selectedCities as $city) {
+            if (! is_array($city)) {
+                continue;
+            }
+
+            $key = trim((string) ($city['key'] ?? ''));
+            $country = strtoupper(trim((string) ($city['country'] ?? '')));
+
+            if ($key === '' || $country === '') {
+                continue;
+            }
+
+            $entry = ['key' => $key];
+
+            if (! empty($city['name'])) {
+                $entry['name'] = (string) $city['name'];
+            }
+
+            if (! empty($city['region'])) {
+                $entry['region'] = (string) $city['region'];
+            }
+
+            if (! empty($city['region_id'])) {
+                $entry['region_id'] = (int) $city['region_id'];
+            }
+
+            $entry['country'] = $country;
+            $citiesByCountry[$country][] = $entry;
+        }
+
+        $geo = [
+            'countries' => [],
+            'cities' => [],
+        ];
+
+        foreach ($countries as $country) {
+            if (! empty($citiesByCountry[$country])) {
+                $geo['cities'] = array_merge($geo['cities'], $citiesByCountry[$country]);
+                continue;
+            }
+
+            $geo['countries'][] = $country;
+        }
+
+        if ($geo['countries'] === []) {
+            unset($geo['countries']);
+        }
+
+        if ($geo['cities'] === []) {
+            unset($geo['cities']);
+        }
+
+        if (! isset($geo['countries']) && ! isset($geo['cities'])) {
+            throw new Exception('At least one valid country or city is required.');
+        }
+
+        return $geo;
+    }
+
+    /**
+     * Meta only needs city keys in API payloads; strip extra metadata safely.
+     */
+    protected function normalizeGeoLocationsForApi(array $geoLocations): array
+    {
+        if (! empty($geoLocations['countries']) && is_array($geoLocations['countries'])) {
+            $geoLocations['countries'] = array_values(array_unique(array_map(
+                fn ($code) => strtoupper(trim((string) $code)),
+                $geoLocations['countries']
+            )));
+        }
+
+        if (! empty($geoLocations['cities']) && is_array($geoLocations['cities'])) {
+            $geoLocations['cities'] = array_values(array_map(function ($city) {
+                $key = is_array($city)
+                    ? trim((string) ($city['key'] ?? ''))
+                    : trim((string) $city);
+
+                if ($key === '') {
+                    return null;
+                }
+
+                return ['key' => $key];
+            }, $geoLocations['cities']));
+
+            $geoLocations['cities'] = array_values(array_filter($geoLocations['cities']));
+
+            if ($geoLocations['cities'] === []) {
+                unset($geoLocations['cities']);
+            }
+        }
+
+        return $geoLocations;
+    }
+
+    /**
+     * Search cities, regions, or countries via Meta Targeting Search.
+     */
+    public function searchGeoLocations(
+        string $query,
+        string $locationType = 'city',
+        ?string $countryCode = null
+    ): array {
+        $query = trim($query);
+
+        if (strlen($query) < 2) {
+            return [];
+        }
+
+        $allowedTypes = ['city', 'country', 'region', 'zip'];
+        if (! in_array($locationType, $allowedTypes, true)) {
+            $locationType = 'city';
+        }
+
+        $params = [
+            'type' => 'adgeolocation',
+            'location_types' => json_encode([$locationType]),
+            'q' => $query,
+            'limit' => 25,
+            'access_token' => $this->accessToken,
+        ];
+
+        if ($countryCode) {
+            $params['country_code'] = strtoupper(trim($countryCode));
+        }
+
+        $response = Http::timeout(10)->get("{$this->baseUrl}/search", $params);
+
+        if ($response->failed()) {
+            Log::warning('META_GEO_SEARCH_FAILED', [
+                'query' => $query,
+                'location_type' => $locationType,
+                'country_code' => $countryCode,
+                'response' => $response->body(),
+            ]);
+
+            return [];
+        }
+
+        $items = $response->json()['data'] ?? [];
+
+        return collect($items)->map(function ($item) {
+            return [
+                'key' => (string) ($item['key'] ?? ''),
+                'name' => (string) ($item['name'] ?? ''),
+                'type' => (string) ($item['type'] ?? ''),
+                'country_code' => strtoupper((string) ($item['country_code'] ?? $item['country'] ?? '')),
+                'country_name' => (string) ($item['country_name'] ?? ''),
+                'region' => (string) ($item['region'] ?? ''),
+                'region_id' => isset($item['region_id']) ? (int) $item['region_id'] : null,
+                'supports_city' => (bool) ($item['supports_city'] ?? true),
+            ];
+        })->filter(fn ($item) => $item['key'] !== '' && $item['name'] !== '')->values()->all();
+    }
+
 protected function buildTargeting(array $targeting): array
 {
     /*
@@ -796,6 +967,12 @@ protected function buildTargeting(array $targeting): array
     */
 
     unset($targeting['locales']);
+
+    if (! empty($targeting['geo_locations'])) {
+        $targeting['geo_locations'] = $this->normalizeGeoLocationsForApi(
+            $targeting['geo_locations']
+        );
+    }
 
     /*
     |--------------------------------------------------------------------------
@@ -1763,6 +1940,28 @@ public function getCampaign(string $campaignId): array
 
 public function updateAdSet(string $adsetId, array $data): array
 {
+    if (isset($data['targeting'])) {
+        $targeting = $data['targeting'];
+
+        if (is_string($targeting)) {
+            $decoded = json_decode($targeting, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new Exception('Invalid targeting JSON');
+            }
+
+            $targeting = $decoded;
+        }
+
+        if (! is_array($targeting)) {
+            throw new Exception('Invalid targeting structure');
+        }
+
+        $targeting = $this->buildTargeting($targeting);
+        $targeting = $this->applyFacebookInstagramPlacements($targeting);
+        $data['targeting'] = json_encode($targeting);
+    }
+
     Log::info('META_ADSET_UPDATE',[
         'adset_id'=>$adsetId,
         'payload'=>$data
