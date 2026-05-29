@@ -2021,7 +2021,7 @@ public function getBillingInfo(string $accountId)
 | Fetch all ads insights in ONE request (avoids rate limit)
 */
 
-public function getInsightsBatch(string $accountId): array
+public function getInsightsBatch(string $accountId, string $datePreset = 'today'): array
 {
     $accountId = $this->formatAccount($accountId);
 
@@ -2036,7 +2036,7 @@ public function getInsightsBatch(string $accountId): array
             'spend'
         ]),
 
-        'date_preset' => 'today',
+        'date_preset' => $datePreset,
 
         'limit' => 500
     ]);

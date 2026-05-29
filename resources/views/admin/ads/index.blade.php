@@ -91,7 +91,7 @@ ALERTS
         <p class="mt-1 text-2xl font-bold tabular-nums text-emerald-600" id="metric-active-ads">{{ $ads->getCollection()->where('status','ACTIVE')->count() }}</p>
     </div>
     <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
-        <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Total spend</p>
+        <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Lifetime spend</p>
         <p class="mt-1 text-2xl font-bold tabular-nums text-xander-navy" id="metric-total-spend">${{ number_format($ads->getCollection()->sum('spend'),2) }}</p>
     </div>
     <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
@@ -117,8 +117,8 @@ ALERTS
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums text-fuchsia-700 lg:px-5" title="Instagram impressions (Meta)">IG impr.</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Clicks</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">CTR</th>
-<th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Spend</th>
-<th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Today</th>
+<th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" title="All-time spend on Meta">Lifetime</th>
+<th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" title="Spend today">Today</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Budget</th>
 <th class="min-w-[6rem] whitespace-nowrap px-4 py-3 lg:px-5">Reason</th>
 <th class="sticky right-0 z-20 min-w-[10.5rem] whitespace-nowrap border-l border-slate-200 bg-slate-50/95 px-4 py-3 text-right shadow-[-12px_0_24px_-12px_rgba(15,23,42,0.12)] backdrop-blur-sm lg:min-w-[11rem] lg:px-5">Actions</th>

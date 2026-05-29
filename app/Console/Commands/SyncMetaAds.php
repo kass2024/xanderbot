@@ -122,9 +122,25 @@ class SyncMetaAds extends Command
 
             $this->pauseBetweenMetaCalls();
 
-            $insights = $this->safeMetaCall(fn () => $this->meta->getInsightsBatch($accountId));
+            $lifetimeMap = [];
 
-            $insightMap = collect($insights['data'] ?? [])
+            try {
+                $lifetimeMap = $this->safeMetaCall(fn () => $this->meta->getAdInsightsMap($accountId, 'maximum'));
+            } catch (\Throwable $e) {
+                if (MetaRateLimit::recordFromMessage($e->getMessage())) {
+                    $this->warn('Meta rate limit while fetching lifetime insights — keeping stored lifetime spend.');
+                } else {
+                    Log::warning('META_SYNC_LIFETIME_INSIGHTS_FAILED', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            $this->pauseBetweenMetaCalls();
+
+            $todayInsights = $this->safeMetaCall(fn () => $this->meta->getInsightsBatch($accountId, 'today'));
+
+            $todayMap = collect($todayInsights['data'] ?? [])
                 ->keyBy('ad_id');
 
             foreach ($metaAds['data'] ?? [] as $metaAd) {
@@ -207,15 +223,23 @@ class SyncMetaAds extends Command
                         $localPayload
                     );
 
-                    $insight = $insightMap[$metaAdId] ?? [];
+                    $lifetime = $this->combineInsightRowsForAd($ad, $lifetimeMap);
+                    $todayRow = $todayMap[$metaAdId] ?? [];
+                    $todaySpend = (float) ($todayRow['spend'] ?? 0);
 
-                    $todaySpend = (float) ($insight['spend'] ?? 0);
-                    $impressions = (int) ($insight['impressions'] ?? 0);
-                    $clicks = (int) ($insight['clicks'] ?? 0);
+                    if ($lifetimeMap !== []) {
+                        $impressions = max((int) ($ad->impressions ?? 0), (int) ($lifetime['impressions'] ?? 0));
+                        $clicks = max((int) ($ad->clicks ?? 0), (int) ($lifetime['clicks'] ?? 0));
+                        $spend = max((float) ($ad->spend ?? 0), (float) ($lifetime['spend'] ?? 0));
+                    } else {
+                        $impressions = (int) ($ad->impressions ?? 0);
+                        $clicks = (int) ($ad->clicks ?? 0);
+                        $spend = (float) ($ad->spend ?? 0);
+                    }
 
                     $ctr = $impressions > 0
                         ? round(($clicks / $impressions) * 100, 2)
-                        : 0;
+                        : (float) ($ad->ctr ?? 0);
 
                     $metricsPayload = AdBudgetGuard::metricsPayloadFromMetaToday($ad, $todaySpend);
 
@@ -223,7 +247,7 @@ class SyncMetaAds extends Command
                         'impressions' => $impressions,
                         'clicks' => $clicks,
                         'ctr' => $ctr,
-                        'spend' => (float) ($insight['spend'] ?? $todaySpend),
+                        'spend' => $spend,
                     ], $metricsPayload)));
 
                     $ad->refresh();
@@ -311,6 +335,34 @@ class SyncMetaAds extends Command
     private function pauseBetweenMetaCalls(): void
     {
         usleep(750000);
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $map
+     * @return array{impressions: int, clicks: int, spend: float}
+     */
+    private function combineInsightRowsForAd(Ad $ad, array $map): array
+    {
+        $impressions = 0;
+        $clicks = 0;
+        $spend = 0.0;
+
+        foreach ($ad->metaIdsForMetrics() as $metaId) {
+            if (! isset($map[$metaId])) {
+                continue;
+            }
+
+            $row = $map[$metaId];
+            $impressions += (int) ($row['impressions'] ?? 0);
+            $clicks += (int) ($row['clicks'] ?? 0);
+            $spend += (float) ($row['spend'] ?? 0);
+        }
+
+        return [
+            'impressions' => $impressions,
+            'clicks' => $clicks,
+            'spend' => $spend,
+        ];
     }
 
     /**
