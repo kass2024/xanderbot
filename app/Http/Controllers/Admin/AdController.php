@@ -712,6 +712,10 @@ class AdController extends Controller
             $accountAdsCache = [];
 
             foreach ($ads as $ad) {
+                if ($cacheOnly) {
+                    continue;
+                }
+
                 $this->ensurePreviousMetaAdIdsStored($ad, $lifetime, $accountAdsCache);
             }
 
@@ -875,21 +879,13 @@ class AdController extends Controller
     public function index(): View
     {
         $ads = $this->adsListQuery()->paginate(20);
-
         $allAds = $this->adsMetricsQuery()->get();
-        $this->hydrateLiveMetricsFromMeta($allAds, false, true);
-        $this->enforceDailyBudgetsOnAds($allAds);
-        $this->hydratePlacementDeliveryFromMeta($allAds);
 
-        $freshMap = $allAds->keyBy('id');
-        $ads->setCollection(
-            $ads->getCollection()->map(function (Ad $ad) use ($freshMap) {
-                $ad = $freshMap->get($ad->id, $ad);
-                $ad->setAttribute('placement', $this->buildPlacementPayloadForAd($ad));
+        $ads->getCollection()->transform(function (Ad $ad) {
+            $ad->setAttribute('placement', $this->buildPlacementPayloadForAd($ad));
 
-                return $ad;
-            })
-        );
+            return $ad;
+        });
 
         $metrics = $this->buildAdsMetrics($allAds);
 
@@ -1872,13 +1868,15 @@ public function publish(Ad $ad): RedirectResponse
     {
         try {
             $ads = $this->adsMetricsQuery()->get();
-            $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, true, true);
+            $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, true, false);
 
-            if (! $metaSynced) {
-                $metaSynced = $this->hydrateLiveMetricsFromMeta($ads, false, true);
+            try {
+                $this->hydratePlacementDeliveryFromMeta($ads);
+            } catch (Throwable $e) {
+                Log::warning('ADS_LIVE_PLACEMENT_FAILED', [
+                    'error' => $e->getMessage(),
+                ]);
             }
-
-            $this->hydratePlacementDeliveryFromMeta($ads);
 
             $metrics = $this->buildAdsMetrics($ads);
 
@@ -1888,6 +1886,7 @@ public function publish(Ad $ad): RedirectResponse
                     'ads' => $ads->map(fn (Ad $ad) => $this->formatAdForLiveJson($ad))->values(),
                     'refreshed_at' => now()->toIso8601String(),
                     'meta_synced' => $metaSynced,
+                    'warning' => $metaSynced ? null : 'Showing saved metrics — Meta sync runs in background.',
                 ])
                 ->header('Cache-Control', 'no-store, no-cache, must-revalidate');
         } catch (Throwable $e) {

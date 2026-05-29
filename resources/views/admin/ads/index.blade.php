@@ -26,7 +26,7 @@
         </p>
         <p class="mt-2 inline-flex items-center gap-2 text-xs text-slate-500">
             <span id="live-indicator" class="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true"></span>
-            <span id="live-status">Live from Meta — updating…</span>
+            <span id="live-status">Saved metrics — syncing with Meta…</span>
         </p>
     </div>
     <div class="flex flex-shrink-0 flex-wrap items-center gap-2 sm:gap-3">
