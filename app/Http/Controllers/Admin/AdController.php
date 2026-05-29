@@ -512,42 +512,53 @@ class AdController extends Controller
             return;
         }
 
-        $metaImpressions = (int) ($lifetimeRow['impressions'] ?? $todayRow['impressions'] ?? 0);
-        $metaClicks = (int) ($lifetimeRow['clicks'] ?? $todayRow['clicks'] ?? 0);
-        $metaSpend = $this->parseInsightMetric($lifetimeRow ?? [], 'spend');
-        if ($metaSpend <= 0 && $todayRow) {
-            $metaSpend = $this->parseInsightMetric($todayRow, 'spend');
-        }
-
-        $hadLocal = ((int) ($ad->impressions ?? 0)) > 0
-            || ((float) ($ad->spend ?? 0)) > 0.00001;
-        $metaHasActivity = $metaImpressions > 0 || $metaClicks > 0 || $metaSpend > 0.00001;
-
-        if ($hadLocal && ! $metaHasActivity) {
-            if ($enforceBudget) {
-                AdBudgetGuard::enforce($ad, $this->meta, null);
-            }
-
-            return;
-        }
-
-        $impressions = max((int) ($ad->impressions ?? 0), $metaImpressions);
-        $clicks = max((int) ($ad->clicks ?? 0), $metaClicks);
-        $spend = max((float) ($ad->spend ?? 0), $metaSpend);
-        $ctr = $impressions > 0
-            ? round(($clicks / $impressions) * 100, 2)
-            : (float) ($lifetimeRow['ctr'] ?? $todayRow['ctr'] ?? 0);
-
         $metaTodaySpend = $todayRow
             ? $this->parseInsightMetric($todayRow, 'spend')
             : 0;
 
-        $payload = [
-            'impressions' => $impressions,
-            'clicks' => $clicks,
-            'spend' => $spend,
-            'ctr' => $ctr,
-        ];
+        if ($lifetimeRow) {
+            $metaImpressions = (int) ($lifetimeRow['impressions'] ?? 0);
+            $metaClicks = (int) ($lifetimeRow['clicks'] ?? 0);
+            $metaSpend = $this->parseInsightMetric($lifetimeRow, 'spend');
+
+            $hadLocal = ((int) ($ad->impressions ?? 0)) > 0
+                || ((float) ($ad->spend ?? 0)) > 0.00001;
+            $metaHasActivity = $metaImpressions > 0 || $metaClicks > 0 || $metaSpend > 0.00001;
+
+            if ($hadLocal && ! $metaHasActivity) {
+                if ($enforceBudget) {
+                    AdBudgetGuard::enforce($ad, $this->meta, $metaTodaySpend > 0 ? $metaTodaySpend : null);
+                }
+
+                return;
+            }
+
+            $impressions = max((int) ($ad->impressions ?? 0), $metaImpressions);
+            $clicks = max((int) ($ad->clicks ?? 0), $metaClicks);
+            $spend = max((float) ($ad->spend ?? 0), $metaSpend);
+            $ctr = $impressions > 0
+                ? round(($clicks / $impressions) * 100, 2)
+                : (float) ($lifetimeRow['ctr'] ?? $todayRow['ctr'] ?? 0);
+
+            $payload = [
+                'impressions' => $impressions,
+                'clicks' => $clicks,
+                'spend' => $spend,
+                'ctr' => $ctr,
+            ];
+        } else {
+            $impressions = (int) ($ad->impressions ?? 0);
+            $clicks = (int) ($ad->clicks ?? 0);
+            $spend = (float) ($ad->spend ?? 0);
+            $ctr = (float) ($ad->ctr ?? 0);
+
+            $payload = [
+                'impressions' => $impressions,
+                'clicks' => $clicks,
+                'spend' => $spend,
+                'ctr' => $ctr,
+            ];
+        }
 
         if (Schema::hasColumn('ads', 'spend_date')) {
             $payload = array_merge($payload, AdBudgetGuard::metricsPayloadFromMetaToday($ad, $metaTodaySpend));
@@ -797,6 +808,7 @@ class AdController extends Controller
             'total_ads' => $totalAds ?? $collection->count(),
             'active_ads' => $collection->where('status', 'ACTIVE')->count(),
             'total_spend' => $collection->sum('spend'),
+            'lifetime_spend' => $collection->sum('spend'),
             'total_clicks' => $collection->sum('clicks'),
             'total_impressions' => $collection->sum('impressions'),
             'avg_ctr' => $collection->avg('ctr'),
@@ -818,6 +830,7 @@ class AdController extends Controller
             'clicks' => (int) ($ad->clicks ?? 0),
             'ctr' => (float) ($ad->ctr ?? 0),
             'spend' => (float) ($ad->spend ?? 0),
+            'lifetime_spend' => (float) ($ad->spend ?? 0),
             'daily_spend' => $ad->displayDailySpend(),
             'daily_budget' => (float) ($ad->daily_budget ?? 0),
             'pause_reason' => $ad->pause_reason ?? null,

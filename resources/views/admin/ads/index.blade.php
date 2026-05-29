@@ -469,7 +469,7 @@ async function refreshAdsDashboard(){
 
         if(totalAds) totalAds.textContent = number(data.metrics.total_ads);
         if(activeAds) activeAds.textContent = number(data.metrics.active_ads);
-        if(totalSpend) totalSpend.textContent = money(data.metrics.total_spend);
+        if(totalSpend) totalSpend.textContent = money(data.metrics.lifetime_spend ?? data.metrics.total_spend);
         if(totalClicks) totalClicks.textContent = number(data.metrics.total_clicks);
 
         data.ads.forEach(ad => {
@@ -490,7 +490,7 @@ async function refreshAdsDashboard(){
             }
             if(clk) clk.textContent = number(ad.clicks);
             if(ctr) ctr.innerHTML = renderCtr(ad.ctr);
-            if(spn) spn.textContent = money(ad.spend);
+            if(spn) spn.textContent = money(ad.lifetime_spend ?? ad.spend);
             if(tdy) tdy.textContent = money(ad.daily_spend);
 
             if(sts){

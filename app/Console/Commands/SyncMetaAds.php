@@ -11,6 +11,7 @@ use App\Services\MetaAdsService;
 use App\Support\AdBudgetGuard;
 use App\Support\MetaRateLimit;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class SyncMetaAds extends Command
@@ -268,6 +269,10 @@ class SyncMetaAds extends Command
 
             MetaRateLimit::clear();
 
+            if ($lifetimeMap !== []) {
+                $this->warmInsightsCache($accountId, $lifetimeMap, $todayMap);
+            }
+
             $this->info('Sync completed successfully');
 
             return Command::SUCCESS;
@@ -335,6 +340,28 @@ class SyncMetaAds extends Command
     private function pauseBetweenMetaCalls(): void
     {
         usleep(750000);
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $lifetimeMap
+     * @param  \Illuminate\Support\Collection<string, array<string, mixed>>  $todayMap
+     */
+    private function warmInsightsCache(string $accountId, array $lifetimeMap, $todayMap): void
+    {
+        try {
+            Cache::put(
+                'meta_ad_insights_maps:'.md5($accountId),
+                [
+                    'lifetime' => $lifetimeMap,
+                    'today' => $todayMap->all(),
+                ],
+                now()->addSeconds(30)
+            );
+        } catch (\Throwable $e) {
+            Log::warning('META_SYNC_CACHE_WARM_FAILED', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

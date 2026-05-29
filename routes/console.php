@@ -17,3 +17,10 @@ use Illuminate\Support\Facades\Artisan;
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
+
+Artisan::command('meta:resync-ad-metrics {--discover} {--ad=}', function () {
+    return $this->call('ads:resync-metrics', [
+        '--discover' => (bool) $this->option('discover'),
+        '--ad' => $this->option('ad'),
+    ]);
+})->purpose('Alias for ads:resync-metrics');
