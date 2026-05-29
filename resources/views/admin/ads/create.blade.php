@@ -58,7 +58,7 @@ Ad Name
 <input
 type="text"
 name="name"
-value="{{ old('name') }}"
+value="{{ old('name', request('name')) }}"
 class="w-full border rounded-lg px-4 py-2 focus:ring focus:ring-blue-200"
 required>
 
@@ -82,7 +82,7 @@ required>
 
 <option
 value="{{ $adset->id }}"
-{{ old('adset_id') == $adset->id ? 'selected' : '' }}
+{{ old('adset_id', request('adset')) == $adset->id ? 'selected' : '' }}
 >
 
 {{ $adset->name }}
@@ -122,7 +122,7 @@ value="{{ $creative->id }}"
 data-headline="{{ $creative->headline }}"
 data-body="{{ $creative->body }}"
 data-image="{{ $creative->image_url }}"
-{{ old('creative_id') == $creative->id ? 'selected' : '' }}
+{{ old('creative_id', request('creative')) == $creative->id ? 'selected' : '' }}
 >
 
 {{ $creative->name }}

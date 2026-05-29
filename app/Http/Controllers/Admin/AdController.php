@@ -1586,22 +1586,13 @@ public function pause(Ad $ad): RedirectResponse
 }
 public function duplicate(Ad $ad): RedirectResponse
 {
-    $copy = $ad->replicate();
-
-    $copy->name = $ad->name.' Copy';
-
-    $copy->meta_ad_id = null;
-
-    $copy->impressions = 0;
-    $copy->clicks = 0;
-    $copy->spend = 0;
-    $copy->ctr = 0;
-
-    $copy->status = 'PAUSED';
-
-    $copy->save();
-
-    return back()->with('success','Ad duplicated.');
+    return redirect()
+        ->route('admin.ads.create', [
+            'adset' => $ad->adset_id,
+            'creative' => $ad->creative_id,
+            'name' => $ad->name.' Copy',
+        ])
+        ->with('info', 'Review the form and save to publish this duplicate on Meta.');
 }
 /**
  * Patch ad set placements + swap in an Instagram-enabled creative on Meta.

@@ -12,6 +12,7 @@ use App\Models\AdAccount;
 use App\Models\Campaign;
 use App\Models\AdSet;
 use App\Models\Ad;
+use App\Models\Creative;
 
 class SyncMetaAds extends Command
 {
@@ -102,7 +103,7 @@ class SyncMetaAds extends Command
                 if (!$campaignId) continue;
 
                 $budget = isset($a['daily_budget'])
-                    ? ((int)$a['daily_budget']) / 100
+                    ? (int) $a['daily_budget']
                     : null;
 
                 AdSet::updateOrCreate(
@@ -117,6 +118,8 @@ class SyncMetaAds extends Command
             }
 
             $adsetMap = AdSet::pluck('id', 'meta_id');
+
+            $legacyMetaAdIds = $this->collectLegacyMetaAdIds();
 
             /*
             |----------------------------------------------------------
@@ -143,7 +146,16 @@ class SyncMetaAds extends Command
 
                 try {
 
-                    $metaAdId = $metaAd['id'];
+                    $metaAdId = (string) ($metaAd['id'] ?? '');
+
+                    if ($metaAdId === '') {
+                        continue;
+                    }
+
+                    if (in_array($metaAdId, $legacyMetaAdIds, true)) {
+                        continue;
+                    }
+
                     $adsetId = $adsetMap[$metaAd['adset_id']] ?? null;
 
                     if (!$adsetId) continue;
@@ -176,6 +188,26 @@ class SyncMetaAds extends Command
                         'adset_id' => $adsetId,
                         'name' => $metaAd['name'],
                     ];
+
+                    if (! $existing) {
+                        $creativeMetaId = (string) (data_get($metaAd, 'creative.id') ?? '');
+
+                        if ($creativeMetaId !== '') {
+                            $creative = Creative::where('meta_id', $creativeMetaId)->first();
+
+                            if ($creative) {
+                                $localPayload['creative_id'] = $creative->id;
+                            }
+                        }
+
+                        if (empty($localPayload['creative_id'])) {
+                            Log::info('AD_SYNC_SKIP_ORPHAN', [
+                                'meta_ad_id' => $metaAdId,
+                                'name' => $metaAd['name'] ?? null,
+                            ]);
+                            continue;
+                        }
+                    }
 
                     $intentionalPause = $existing
                         && $existing->status === Ad::STATUS_PAUSED
@@ -286,5 +318,24 @@ class SyncMetaAds extends Command
 
             throw $e;
         }
+    }
+
+    /**
+     * Meta ad ids superseded by IG reprovision — do not import as separate local ads.
+     *
+     * @return list<string>
+     */
+    private function collectLegacyMetaAdIds(): array
+    {
+        return Ad::query()
+            ->whereNotNull('previous_meta_ad_ids')
+            ->pluck('previous_meta_ad_ids')
+            ->filter()
+            ->flatMap(fn ($ids) => is_array($ids) ? $ids : [])
+            ->map(fn ($id) => (string) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
     }
 }

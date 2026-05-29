@@ -530,7 +530,9 @@ public function sync(AdSet $adset)
         $adset->update([
 
             'status' => $metaData['status'] ?? $adset->status,
-            'daily_budget' => $metaData['daily_budget'] ?? $adset->daily_budget
+            'daily_budget' => isset($metaData['daily_budget'])
+                ? (int) $metaData['daily_budget']
+                : $adset->daily_budget,
 
         ]);
 
