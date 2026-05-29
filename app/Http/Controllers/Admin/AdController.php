@@ -552,7 +552,7 @@ class AdController extends Controller
         if (Schema::hasColumn('ads', 'spend_date')) {
             $payload = array_merge($payload, AdBudgetGuard::metricsPayloadFromMetaToday($ad, $metaTodaySpend));
         } elseif (Schema::hasColumn('ads', 'daily_spend')) {
-            $payload['daily_spend'] = AdBudgetGuard::isBudgetLimitPaused($ad)
+            $payload['daily_spend'] = AdBudgetGuard::isSpendFrozen($ad)
                 ? 0
                 : AdBudgetGuard::cappedSessionSpend($ad, $metaTodaySpend);
         }
@@ -1309,10 +1309,26 @@ public function updateStatus(Request $request, Ad $ad): RedirectResponse
 
         if ($data['status'] === 'PAUSED') {
 
-            // Manual pause
-            $pauseReason = 'manual';
+            $metaTodaySpend = null;
 
-        } elseif ($data['status'] === 'ACTIVE') {
+            if ($ad->meta_ad_id) {
+                try {
+                    $todayInsights = $this->meta->getInsights($ad->meta_ad_id, 'today');
+                    $metaTodaySpend = (float) ($todayInsights['spend'] ?? 0);
+                } catch (Throwable $e) {
+                    Log::warning('AD_STATUS_PAUSE_INSIGHTS_FAILED', [
+                        'ad_id' => $ad->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            $ad->update(AdBudgetGuard::pausePayload($ad, 'manual', $metaTodaySpend));
+
+            return back()->with('success', 'Ad status updated.');
+        }
+
+        if ($data['status'] === 'ACTIVE') {
 
             // Reset pause reason when activating
             $pauseReason = null;
@@ -1330,7 +1346,7 @@ public function updateStatus(Request $request, Ad $ad): RedirectResponse
         */
         $ad->update([
             'status' => $data['status'],
-            'pause_reason' => $pauseReason
+            'pause_reason' => $pauseReason ?? null
         ]);
 
         return back()->with('success', 'Ad status updated.');
@@ -1422,19 +1438,38 @@ public function update(Request $request, Ad $ad): RedirectResponse
 
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | UPDATE LOCAL DB
-        |--------------------------------------------------------------------------
-        */
-
-        $ad->update([
+        $localPayload = [
             'name' => $data['name'],
             'adset_id' => $data['adset_id'],
             'creative_id' => $data['creative_id'],
             'daily_budget' => $data['daily_budget'],
-            'status' => $data['status']
-        ]);
+        ];
+
+        if ($data['status'] === 'PAUSED') {
+            $metaTodaySpend = null;
+
+            if ($ad->meta_ad_id) {
+                try {
+                    $todayInsights = $this->meta->getInsights($ad->meta_ad_id, 'today');
+                    $metaTodaySpend = (float) ($todayInsights['spend'] ?? 0);
+                } catch (Throwable $e) {
+                    Log::warning('AD_UPDATE_PAUSE_INSIGHTS_FAILED', [
+                        'ad_id' => $ad->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            $ad->update(array_merge(
+                $localPayload,
+                AdBudgetGuard::pausePayload($ad, 'manual', $metaTodaySpend)
+            ));
+        } else {
+            $ad->update(array_merge($localPayload, [
+                'status' => $data['status'],
+                'pause_reason' => null,
+            ]));
+        }
 
         return redirect()
             ->route('admin.ads.index')
@@ -1500,19 +1535,26 @@ public function pause(Ad $ad): RedirectResponse
 {
     try {
 
+        $metaTodaySpend = null;
+
         if ($ad->meta_ad_id) {
+            try {
+                $todayInsights = $this->meta->getInsights($ad->meta_ad_id, 'today');
+                $metaTodaySpend = (float) ($todayInsights['spend'] ?? 0);
+            } catch (Throwable $e) {
+                Log::warning('AD_PAUSE_TODAY_INSIGHTS_FAILED', [
+                    'ad_id' => $ad->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
 
             $this->meta->updateAd(
                 $ad->meta_ad_id,
                 ['status' => 'PAUSED']
             );
-
         }
 
-        $ad->update([
-            'status' => 'PAUSED',
-            'pause_reason' => 'manual'
-        ]);
+        $ad->update(AdBudgetGuard::pausePayload($ad, 'manual', $metaTodaySpend));
 
         return back()->with('success','Ad paused manually.');
 

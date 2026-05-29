@@ -170,14 +170,25 @@ class SyncMetaAds extends Command
                         }
                     }
 
+                    $existing = Ad::where('meta_ad_id', $metaAdId)->first();
+
+                    $localPayload = [
+                        'adset_id' => $adsetId,
+                        'name' => $metaAd['name'],
+                    ];
+
+                    $intentionalPause = $existing
+                        && $existing->status === Ad::STATUS_PAUSED
+                        && in_array($existing->pause_reason, ['manual', 'budget_limit', 'budget'], true);
+
+                    if (! $intentionalPause) {
+                        $localPayload['status'] = $metaAd['status'] ?? 'ACTIVE';
+                        $localPayload['pause_reason'] = $pauseReason;
+                    }
+
                     $ad = Ad::updateOrCreate(
                         ['meta_ad_id' => $metaAdId],
-                        [
-                            'adset_id' => $adsetId,
-                            'name' => $metaAd['name'],
-                            'status' => $metaAd['status'] ?? 'ACTIVE',
-                            'pause_reason' => $pauseReason,
-                        ]
+                        $localPayload
                     );
 
                     $insight = $insightMap[$metaAdId] ?? [];

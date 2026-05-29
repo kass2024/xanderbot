@@ -280,11 +280,18 @@ protected $fillable = [
 
     public function displayDailySpend(): float
     {
-        if (in_array($this->pause_reason, ['budget_limit', 'budget'], true) && $this->status === self::STATUS_PAUSED) {
+        if ($this->status === self::STATUS_PAUSED) {
             return 0;
         }
 
-        return (float) ($this->daily_spend ?? 0);
+        $budget = (float) ($this->daily_budget ?? 0);
+        $spent = (float) ($this->daily_spend ?? 0);
+
+        if ($budget > 0) {
+            return min($spent, $budget);
+        }
+
+        return $spent;
     }
 
     /**

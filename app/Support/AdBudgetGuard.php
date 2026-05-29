@@ -11,6 +11,9 @@ use Throwable;
 
 class AdBudgetGuard
 {
+    /** Pause Meta before reported spend reaches budget (Meta can overshoot between syncs). */
+    public const BUDGET_PAUSE_BUFFER = 0.15;
+
     protected static ?bool $hasAnchorColumn = null;
 
     public static function hasAnchorColumn(): bool
@@ -41,9 +44,14 @@ class AdBudgetGuard
             && $ad->status === Ad::STATUS_PAUSED;
     }
 
+    public static function isSpendFrozen(Ad $ad): bool
+    {
+        return $ad->status === Ad::STATUS_PAUSED;
+    }
+
     public static function sessionSpend(Ad $ad, float $metaTodaySpend): float
     {
-        if (static::isBudgetLimitPaused($ad)) {
+        if (static::isSpendFrozen($ad)) {
             return 0;
         }
 
@@ -77,7 +85,7 @@ class AdBudgetGuard
     {
         $today = Carbon::today()->toDateString();
 
-        if (static::isBudgetLimitPaused($ad)) {
+        if (static::isSpendFrozen($ad)) {
             $payload = [
                 'daily_spend' => 0,
                 'spend_date' => $today,
@@ -106,19 +114,21 @@ class AdBudgetGuard
 
     public static function reconcileBudgetLimitPause(Ad $ad, float $metaTodaySpend): void
     {
-        if (! static::isBudgetLimitPaused($ad)) {
+        static::reconcilePausedAdSpend($ad, $metaTodaySpend);
+    }
+
+    /**
+     * Keep today's spend at zero for any paused ad; advance anchor if Meta still reports spend.
+     */
+    public static function reconcilePausedAdSpend(Ad $ad, float $metaTodaySpend): void
+    {
+        if (! static::isSpendFrozen($ad)) {
             return;
         }
 
-        if ((float) $ad->daily_budget <= 0) {
-            return;
-        }
+        $anchor = (float) ($ad->daily_spend_anchor ?? 0);
 
-        if (static::sessionSpend($ad, $metaTodaySpend) < (float) $ad->daily_budget) {
-            return;
-        }
-
-        if (static::hasAnchorColumn() && (float) ($ad->daily_spend_anchor ?? 0) >= $metaTodaySpend) {
+        if (static::hasAnchorColumn() && $anchor >= $metaTodaySpend) {
             return;
         }
 
@@ -179,12 +189,69 @@ class AdBudgetGuard
             return false;
         }
 
-        return static::dailySessionSpend($ad, $metaTodaySpend) >= $budget - 0.001;
+        $threshold = max(0, $budget - static::BUDGET_PAUSE_BUFFER);
+
+        return static::dailySessionSpend($ad, $metaTodaySpend) >= $threshold - 0.001;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public static function pausePayload(Ad $ad, string $pauseReason, ?float $metaTodaySpend = null): array
+    {
+        $today = Carbon::today()->toDateString();
+        $anchor = $metaTodaySpend ?? static::dailySessionSpend($ad, $metaTodaySpend);
+
+        return static::filterPersistablePayload([
+            'status' => Ad::STATUS_PAUSED,
+            'pause_reason' => $pauseReason,
+            'daily_spend' => 0,
+            'daily_spend_anchor' => max(0, $anchor),
+            'spend_date' => $today,
+        ]);
+    }
+
+    public static function ensurePausedOnMeta(Ad $ad, MetaAdsService $meta): void
+    {
+        if (! static::isSpendFrozen($ad) || ! $ad->meta_ad_id) {
+            return;
+        }
+
+        try {
+            $response = $meta->updateAd($ad->meta_ad_id, ['status' => 'PAUSED']);
+
+            if (isset($response['error'])) {
+                throw new \Exception($response['error']['message'] ?? 'Pause failed');
+            }
+        } catch (Throwable $e) {
+            Log::warning('AD_ENSURE_PAUSED_META_FAILED', [
+                'ad_id' => $ad->id,
+                'meta_ad_id' => $ad->meta_ad_id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     public static function enforce(Ad $ad, MetaAdsService $meta, ?float $metaTodaySpend = null): void
     {
-        if (! $ad->meta_ad_id || ! $ad->daily_budget || $ad->daily_budget <= 0) {
+        if (! $ad->meta_ad_id) {
+            return;
+        }
+
+        if (static::isSpendFrozen($ad)) {
+            if ($metaTodaySpend !== null) {
+                $anchor = (float) ($ad->daily_spend_anchor ?? 0);
+
+                if ($metaTodaySpend > $anchor + 0.001) {
+                    static::ensurePausedOnMeta($ad, $meta);
+                    static::reconcilePausedAdSpend($ad, $metaTodaySpend);
+                }
+            }
+
+            return;
+        }
+
+        if (! $ad->daily_budget || $ad->daily_budget <= 0) {
             return;
         }
 
@@ -196,10 +263,6 @@ class AdBudgetGuard
             return;
         }
 
-        if ($ad->pause_reason === 'manual') {
-            return;
-        }
-
         try {
             $response = $meta->updateAd($ad->meta_ad_id, ['status' => 'PAUSED']);
 
@@ -207,29 +270,16 @@ class AdBudgetGuard
                 throw new \Exception($response['error']['message'] ?? 'Pause failed');
             }
 
-            $anchorSpend = $metaTodaySpend ?? (float) ($ad->daily_spend_anchor ?? 0) + (float) $ad->daily_spend;
-            if ($metaTodaySpend !== null) {
-                $anchorSpend = $metaTodaySpend;
-            }
-
-            $today = Carbon::today()->toDateString();
-
-            $payload = static::filterPersistablePayload([
-                'status' => Ad::STATUS_PAUSED,
-                'pause_reason' => 'budget_limit',
-                'daily_spend' => 0,
-                'daily_spend_anchor' => max(0, $anchorSpend),
-                'spend_date' => $today,
-            ]);
+            $payload = static::pausePayload($ad, 'budget_limit', $metaTodaySpend);
 
             $ad->update($payload);
             $ad->status = Ad::STATUS_PAUSED;
             $ad->pause_reason = 'budget_limit';
             $ad->daily_spend = 0;
-            $ad->spend_date = $today;
+            $ad->spend_date = $payload['spend_date'] ?? Carbon::today()->toDateString();
 
             if (static::hasAnchorColumn()) {
-                $ad->daily_spend_anchor = max(0, $anchorSpend);
+                $ad->daily_spend_anchor = (float) ($payload['daily_spend_anchor'] ?? 0);
             }
 
             Log::info('AD_AUTO_PAUSED_BUDGET', [
