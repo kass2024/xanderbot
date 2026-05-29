@@ -1320,6 +1320,12 @@ public function updateStatus(Request $request, Ad $ad): RedirectResponse
             return back()->with('success', 'Ad paused on Meta — billing stopped.');
         }
 
+        if ($data['status'] === 'ACTIVE') {
+            return back()->withErrors([
+                'status' => 'Auto-resume is disabled. Use Publish on the Ads list to resume delivery.',
+            ]);
+        }
+
         /*
         |------------------------------------------------------------------
         | Update on Meta (if synced)
@@ -1342,12 +1348,7 @@ public function updateStatus(Request $request, Ad $ad): RedirectResponse
         */
         $pauseReason = $ad->pause_reason; // keep existing by default
 
-        if ($data['status'] === 'ACTIVE') {
-
-            // Reset pause reason when activating
-            $pauseReason = null;
-
-        } elseif ($data['status'] === 'ARCHIVED') {
+        if ($data['status'] === 'ARCHIVED') {
 
             // Archived = no pause logic needed
             $pauseReason = null;
@@ -1442,13 +1443,13 @@ public function update(Request $request, Ad $ad): RedirectResponse
 
         if ($ad->meta_ad_id) {
 
-            $this->meta->updateAd(
-                $ad->meta_ad_id,
-                [
-                    'name' => $data['name'],
-                    'status' => $data['status']
-                ]
-            );
+            $metaPayload = ['name' => $data['name']];
+
+            if ($data['status'] !== 'ACTIVE') {
+                $metaPayload['status'] = $data['status'];
+            }
+
+            $this->meta->updateAd($ad->meta_ad_id, $metaPayload);
 
         }
 
@@ -1458,6 +1459,12 @@ public function update(Request $request, Ad $ad): RedirectResponse
             'creative_id' => $data['creative_id'],
             'daily_budget' => $data['daily_budget'],
         ];
+
+        if ($data['status'] === 'ACTIVE' && $ad->status !== Ad::STATUS_ACTIVE) {
+            return back()->withErrors([
+                'status' => 'Auto-resume is disabled. Use Publish on the Ads list to resume delivery.',
+            ])->withInput();
+        }
 
         if ($data['status'] === 'PAUSED') {
             $metaTodaySpend = null;
@@ -1476,6 +1483,11 @@ public function update(Request $request, Ad $ad): RedirectResponse
 
             AdBudgetGuard::pauseImmediately($ad, $this->meta, 'manual', $metaTodaySpend);
             $ad->update($localPayload);
+        } elseif ($data['status'] === 'ACTIVE') {
+            $ad->update(array_merge($localPayload, [
+                'status' => Ad::STATUS_ACTIVE,
+                'pause_reason' => null,
+            ]));
         } else {
             $ad->update(array_merge($localPayload, [
                 'status' => $data['status'],
@@ -1504,9 +1516,9 @@ public function activate(Ad $ad): RedirectResponse
 {
     try {
 
-        if (AdBudgetGuard::isBudgetLimitPaused($ad)) {
+        if (AdBudgetGuard::requiresPublishToResume($ad)) {
             return back()->withErrors([
-                'activate' => 'This ad was paused for daily budget. Use Publish to start a new spend session.',
+                'activate' => 'Use Publish to resume this ad and start a new spend session.',
             ]);
         }
 
@@ -1800,47 +1812,6 @@ public function publish(Ad $ad): RedirectResponse
             $ad->refresh();
         }
 
-        /*
-        |------------------------------------------------------------------
-        | Prepare Payload
-        |------------------------------------------------------------------
-        */
-        $payload = [
-            'status' => 'ACTIVE'
-        ];
-
-        /*
-        |------------------------------------------------------------------
-        | Send Request To Meta
-        |------------------------------------------------------------------
-        */
-        Log::info('META_AD_PUBLISH_REQUEST', [
-            'ad_id' => $ad->id,
-            'meta_ad_id' => $ad->meta_ad_id,
-            'payload' => $payload
-        ]);
-
-        $response = $this->meta->updateAd(
-            $ad->meta_ad_id,
-            $payload
-        );
-
-        Log::info('META_AD_PUBLISH_RESPONSE', [
-            'ad_id' => $ad->id,
-            'response' => $response
-        ]);
-
-        /*
-        |------------------------------------------------------------------
-        | Handle Meta Errors
-        |------------------------------------------------------------------
-        */
-        if (isset($response['error'])) {
-            throw new Exception(
-                $response['error']['message'] ?? 'Meta API error'
-            );
-        }
-
         if (! AdBudgetGuard::canManualPublish($ad)) {
             throw new Exception(AdBudgetGuard::publishBlockedMessage($ad));
         }
@@ -1849,6 +1820,28 @@ public function publish(Ad $ad): RedirectResponse
         $metaTodaySpend = (float) ($todayInsights['spend'] ?? 0);
 
         AdBudgetGuard::beginNewSpendSession($ad, $metaTodaySpend);
+
+        Log::info('META_AD_PUBLISH_REQUEST', [
+            'ad_id' => $ad->id,
+            'meta_ad_id' => $ad->meta_ad_id,
+            'meta_today_spend' => $metaTodaySpend,
+        ]);
+
+        $response = $this->meta->updateAd(
+            $ad->meta_ad_id,
+            ['status' => 'ACTIVE']
+        );
+
+        Log::info('META_AD_PUBLISH_RESPONSE', [
+            'ad_id' => $ad->id,
+            'response' => $response
+        ]);
+
+        if (isset($response['error'])) {
+            throw new Exception(
+                $response['error']['message'] ?? 'Meta API error'
+            );
+        }
 
         $ad->update([
             'status' => 'ACTIVE',

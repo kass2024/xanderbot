@@ -392,18 +392,26 @@ class AdBudgetGuard
             return true;
         }
 
-        if (static::isBudgetLimitPaused($ad)) {
+        // Budget-limit or manual pause — only resume via Publish (new spend session).
+        if (static::isSpendFrozen($ad)) {
             return true;
         }
 
         return ! $ad->hasReachedDailyBudget();
     }
 
+    public static function requiresPublishToResume(Ad $ad): bool
+    {
+        return static::isSpendFrozen($ad);
+    }
+
     public static function publishBlockedMessage(Ad $ad): string
     {
-        $spent = static::isBudgetLimitPaused($ad)
-            ? (float) $ad->daily_budget
-            : (float) $ad->daily_spend;
+        if (static::isSpendFrozen($ad)) {
+            return 'Use Publish to resume this ad and start a new spend session.';
+        }
+
+        $spent = (float) $ad->daily_spend;
 
         return sprintf(
             'Daily budget reached ($%s of $%s). Increase the daily budget in Edit, or use Publish to start a new session.',

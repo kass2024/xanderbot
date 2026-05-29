@@ -249,7 +249,7 @@ ALERTS
         @if($ad->status !== 'ACTIVE')
             <form method="POST" action="{{ route('admin.ads.publish',$ad->id) }}" class="m-0">
                 @csrf
-                <button type="submit" class="w-full rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15 transition hover:bg-emerald-100">Publish</button>
+                <button type="submit" class="w-full rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15 transition hover:bg-emerald-100" title="Resume delivery and start a new spend session">Publish</button>
             </form>
         @endif
         @if($ad->status === 'ACTIVE')

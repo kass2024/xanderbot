@@ -164,17 +164,9 @@ required>
 Status
 </label>
 
-<select name="status" class="w-full border rounded-lg px-4 py-2">
+<input type="hidden" name="status" value="PAUSED">
 
-<option value="PAUSED" {{ old('status') == 'PAUSED' ? 'selected' : '' }}>
-Paused
-</option>
-
-<option value="ACTIVE" {{ old('status') == 'ACTIVE' ? 'selected' : '' }}>
-Active
-</option>
-
-</select>
+<p class="text-xs text-slate-500">New ads are created <strong>Paused</strong>. Use <strong>Publish</strong> on the Ads list when you are ready to spend.</p>
 
 </div>
 
