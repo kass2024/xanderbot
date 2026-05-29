@@ -583,12 +583,8 @@ class AdController extends Controller
     protected function enforceDailyBudgetsOnAds(iterable $ads): void
     {
         foreach ($ads as $ad) {
-            if ($ad->status !== Ad::STATUS_ACTIVE || (float) ($ad->daily_budget ?? 0) <= 0) {
-                continue;
-            }
-
-            if (AdBudgetGuard::shouldAutoPauseForBudget($ad, null)) {
-                AdBudgetGuard::enforce($ad, $this->meta, null);
+            if ($ad->status === Ad::STATUS_PAUSED && $ad->meta_ad_id) {
+                AdBudgetGuard::ensurePausedOnMeta($ad, $this->meta);
             }
         }
     }
@@ -979,6 +975,16 @@ class AdController extends Controller
 
             /*
             |--------------------------------------------------------------------------
+            | INSTAGRAM DELIVERY (Page + IG actor on ad set & creative before Meta ad)
+            |--------------------------------------------------------------------------
+            */
+            $this->instagramDelivery->assertInstagramConfigured();
+            $this->instagramDelivery->repairAdSet($adset, true);
+            $this->instagramDelivery->repairCreative($creative, true);
+            $creative->refresh();
+
+            /*
+            |--------------------------------------------------------------------------
             | PREVENT DUPLICATE ADS
             |--------------------------------------------------------------------------
             */
@@ -1073,6 +1079,14 @@ $ad = Ad::create([
 
             DB::commit();
 
+            try {
+                $this->instagramDelivery->repairAd($ad->fresh(['creative', 'adSet.campaign.adAccount']), false, false);
+            } catch (Throwable $igError) {
+                Log::warning('AD_CREATE_IG_ATTACH_FAILED', [
+                    'ad_id' => $ad->id,
+                    'error' => $igError->getMessage(),
+                ]);
+            }
 
             Log::info('META_AD_CREATED', [
 
@@ -1085,7 +1099,7 @@ $ad = Ad::create([
 
             return redirect()
                 ->route('admin.ads.index')
-                ->with('success','Ad created and synced to Meta.');
+                ->with('success','Ad created and synced to Meta with Instagram delivery enabled.');
 
         }
 
@@ -1285,6 +1299,27 @@ public function updateStatus(Request $request, Ad $ad): RedirectResponse
 
     try {
 
+        if ($data['status'] === 'PAUSED') {
+
+            $metaTodaySpend = null;
+
+            if ($ad->meta_ad_id) {
+                try {
+                    $todayInsights = $this->meta->getInsights($ad->meta_ad_id, 'today');
+                    $metaTodaySpend = (float) ($todayInsights['spend'] ?? 0);
+                } catch (Throwable $e) {
+                    Log::warning('AD_STATUS_PAUSE_INSIGHTS_FAILED', [
+                        'ad_id' => $ad->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            AdBudgetGuard::pauseImmediately($ad, $this->meta, 'manual', $metaTodaySpend);
+
+            return back()->with('success', 'Ad paused on Meta — billing stopped.');
+        }
+
         /*
         |------------------------------------------------------------------
         | Update on Meta (if synced)
@@ -1306,27 +1341,6 @@ public function updateStatus(Request $request, Ad $ad): RedirectResponse
         |------------------------------------------------------------------
         */
         $pauseReason = $ad->pause_reason; // keep existing by default
-
-        if ($data['status'] === 'PAUSED') {
-
-            $metaTodaySpend = null;
-
-            if ($ad->meta_ad_id) {
-                try {
-                    $todayInsights = $this->meta->getInsights($ad->meta_ad_id, 'today');
-                    $metaTodaySpend = (float) ($todayInsights['spend'] ?? 0);
-                } catch (Throwable $e) {
-                    Log::warning('AD_STATUS_PAUSE_INSIGHTS_FAILED', [
-                        'ad_id' => $ad->id,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
-            }
-
-            $ad->update(AdBudgetGuard::pausePayload($ad, 'manual', $metaTodaySpend));
-
-            return back()->with('success', 'Ad status updated.');
-        }
 
         if ($data['status'] === 'ACTIVE') {
 
@@ -1460,10 +1474,8 @@ public function update(Request $request, Ad $ad): RedirectResponse
                 }
             }
 
-            $ad->update(array_merge(
-                $localPayload,
-                AdBudgetGuard::pausePayload($ad, 'manual', $metaTodaySpend)
-            ));
+            AdBudgetGuard::pauseImmediately($ad, $this->meta, 'manual', $metaTodaySpend);
+            $ad->update($localPayload);
         } else {
             $ad->update(array_merge($localPayload, [
                 'status' => $data['status'],
@@ -1547,16 +1559,11 @@ public function pause(Ad $ad): RedirectResponse
                     'error' => $e->getMessage(),
                 ]);
             }
-
-            $this->meta->updateAd(
-                $ad->meta_ad_id,
-                ['status' => 'PAUSED']
-            );
         }
 
-        $ad->update(AdBudgetGuard::pausePayload($ad, 'manual', $metaTodaySpend));
+        AdBudgetGuard::pauseImmediately($ad, $this->meta, 'manual', $metaTodaySpend);
 
-        return back()->with('success','Ad paused manually.');
+        return back()->with('success','Ad paused on Meta — billing stopped.');
 
     } catch(Throwable $e){
 
@@ -1565,7 +1572,7 @@ public function pause(Ad $ad): RedirectResponse
         ]);
 
         return back()->withErrors([
-            'pause'=>'Failed to pause ad'
+            'pause'=>'Failed to pause ad: '.$e->getMessage()
         ]);
     }
 }

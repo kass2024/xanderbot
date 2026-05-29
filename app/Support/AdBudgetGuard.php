@@ -11,8 +11,8 @@ use Throwable;
 
 class AdBudgetGuard
 {
-    /** Pause Meta before reported spend reaches budget (Meta can overshoot between syncs). */
-    public const BUDGET_PAUSE_BUFFER = 0.15;
+    /** Pause Meta well before budget — Meta can overshoot between 1-min checks. */
+    public const BUDGET_PAUSE_BUFFER = 0.40;
 
     protected static ?bool $hasAnchorColumn = null;
 
@@ -178,7 +178,14 @@ class AdBudgetGuard
             ? static::sessionSpend($ad, $metaTodaySpend)
             : 0;
 
-        return max($fromDb, $fromMeta);
+        $spent = max($fromDb, $fromMeta);
+        $budget = (float) $ad->daily_budget;
+
+        if ($budget > 0) {
+            return min($spent, $budget);
+        }
+
+        return $spent;
     }
 
     public static function shouldAutoPauseForBudget(Ad $ad, ?float $metaTodaySpend = null): bool
@@ -189,9 +196,10 @@ class AdBudgetGuard
             return false;
         }
 
+        $spent = static::dailySessionSpend($ad, $metaTodaySpend);
         $threshold = max(0, $budget - static::BUDGET_PAUSE_BUFFER);
 
-        return static::dailySessionSpend($ad, $metaTodaySpend) >= $threshold - 0.001;
+        return $spent >= $threshold - 0.001 || $spent >= $budget - 0.001;
     }
 
     /**
@@ -211,25 +219,43 @@ class AdBudgetGuard
         ]);
     }
 
+    /**
+     * Manual pause: stop Meta billing first, then freeze local spend.
+     *
+     * @throws \Exception
+     */
+    public static function pauseImmediately(Ad $ad, MetaAdsService $meta, string $pauseReason, ?float $metaTodaySpend = null): void
+    {
+        if ($ad->meta_ad_id) {
+            if (! static::pauseAdOnMeta($meta, $ad, true)) {
+                throw new \Exception('Meta refused to pause this ad. Try again or pause in Ads Manager.');
+            }
+        }
+
+        $payload = static::pausePayload($ad, $pauseReason, $metaTodaySpend);
+        $ad->update($payload);
+        $ad->status = Ad::STATUS_PAUSED;
+        $ad->pause_reason = $pauseReason;
+        $ad->daily_spend = 0;
+
+        if (static::hasAnchorColumn()) {
+            $ad->daily_spend_anchor = (float) ($payload['daily_spend_anchor'] ?? 0);
+        }
+
+        Log::info('AD_PAUSED_IMMEDIATELY', [
+            'ad_id' => $ad->id,
+            'meta_ad_id' => $ad->meta_ad_id,
+            'pause_reason' => $pauseReason,
+        ]);
+    }
+
     public static function ensurePausedOnMeta(Ad $ad, MetaAdsService $meta): void
     {
         if (! static::isSpendFrozen($ad) || ! $ad->meta_ad_id) {
             return;
         }
 
-        try {
-            $response = $meta->updateAd($ad->meta_ad_id, ['status' => 'PAUSED']);
-
-            if (isset($response['error'])) {
-                throw new \Exception($response['error']['message'] ?? 'Pause failed');
-            }
-        } catch (Throwable $e) {
-            Log::warning('AD_ENSURE_PAUSED_META_FAILED', [
-                'ad_id' => $ad->id,
-                'meta_ad_id' => $ad->meta_ad_id,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        static::pauseAdOnMeta($meta, $ad, false);
     }
 
     public static function enforce(Ad $ad, MetaAdsService $meta, ?float $metaTodaySpend = null): void
@@ -239,13 +265,10 @@ class AdBudgetGuard
         }
 
         if (static::isSpendFrozen($ad)) {
-            if ($metaTodaySpend !== null) {
-                $anchor = (float) ($ad->daily_spend_anchor ?? 0);
+            static::ensurePausedOnMeta($ad, $meta);
 
-                if ($metaTodaySpend > $anchor + 0.001) {
-                    static::ensurePausedOnMeta($ad, $meta);
-                    static::reconcilePausedAdSpend($ad, $metaTodaySpend);
-                }
+            if ($metaTodaySpend !== null) {
+                static::reconcilePausedAdSpend($ad, $metaTodaySpend);
             }
 
             return;
@@ -263,34 +286,101 @@ class AdBudgetGuard
             return;
         }
 
-        try {
-            $response = $meta->updateAd($ad->meta_ad_id, ['status' => 'PAUSED']);
+        $pausedOnMeta = static::pauseAdOnMeta($meta, $ad, false);
 
-            if (isset($response['error'])) {
-                throw new \Exception($response['error']['message'] ?? 'Pause failed');
-            }
+        if (! $pausedOnMeta) {
+            static::pauseAdSetOnMetaFallback($ad, $meta);
+        }
 
-            $payload = static::pausePayload($ad, 'budget_limit', $metaTodaySpend);
+        $payload = static::pausePayload($ad, 'budget_limit', $metaTodaySpend);
 
-            $ad->update($payload);
-            $ad->status = Ad::STATUS_PAUSED;
-            $ad->pause_reason = 'budget_limit';
-            $ad->daily_spend = 0;
-            $ad->spend_date = $payload['spend_date'] ?? Carbon::today()->toDateString();
+        $ad->update($payload);
+        $ad->status = Ad::STATUS_PAUSED;
+        $ad->pause_reason = 'budget_limit';
+        $ad->daily_spend = 0;
+        $ad->spend_date = $payload['spend_date'] ?? Carbon::today()->toDateString();
 
-            if (static::hasAnchorColumn()) {
-                $ad->daily_spend_anchor = (float) ($payload['daily_spend_anchor'] ?? 0);
-            }
+        if (static::hasAnchorColumn()) {
+            $ad->daily_spend_anchor = (float) ($payload['daily_spend_anchor'] ?? 0);
+        }
 
-            Log::info('AD_AUTO_PAUSED_BUDGET', [
+        Log::info('AD_AUTO_PAUSED_BUDGET', [
+            'ad_id' => $ad->id,
+            'meta_ad_id' => $ad->meta_ad_id,
+            'daily_budget' => $ad->daily_budget,
+            'session_spend' => static::dailySessionSpend($ad, $metaTodaySpend),
+            'meta_pause_ok' => $pausedOnMeta,
+        ]);
+
+        if (! $pausedOnMeta) {
+            Log::critical('AD_AUTO_PAUSE_META_FAILED_AFTER_LOCAL', [
                 'ad_id' => $ad->id,
                 'meta_ad_id' => $ad->meta_ad_id,
-                'daily_budget' => $ad->daily_budget,
-                'session_spend' => static::dailySessionSpend($ad, $metaTodaySpend),
+            ]);
+        }
+    }
+
+    protected static function pauseAdOnMeta(MetaAdsService $meta, Ad $ad, bool $throwOnFail): bool
+    {
+        if (! $ad->meta_ad_id) {
+            return true;
+        }
+
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            try {
+                $response = $meta->updateAd($ad->meta_ad_id, ['status' => 'PAUSED']);
+
+                if (isset($response['error'])) {
+                    throw new \Exception($response['error']['message'] ?? 'Pause failed');
+                }
+
+                return true;
+            } catch (Throwable $e) {
+                Log::warning('AD_PAUSE_META_ATTEMPT_FAILED', [
+                    'ad_id' => $ad->id,
+                    'meta_ad_id' => $ad->meta_ad_id,
+                    'attempt' => $attempt,
+                    'error' => $e->getMessage(),
+                ]);
+
+                if ($attempt < 3) {
+                    usleep(250000 * $attempt);
+                }
+            }
+        }
+
+        if ($throwOnFail) {
+            throw new \Exception('Could not pause ad on Meta after 3 attempts.');
+        }
+
+        return false;
+    }
+
+    protected static function pauseAdSetOnMetaFallback(Ad $ad, MetaAdsService $meta): void
+    {
+        $ad->loadMissing('adSet');
+
+        $adsetMetaId = (string) ($ad->adSet?->meta_id ?? '');
+
+        if ($adsetMetaId === '') {
+            return;
+        }
+
+        try {
+            $response = $meta->updateAdSet($adsetMetaId, ['status' => 'PAUSED']);
+
+            if (isset($response['error'])) {
+                throw new \Exception($response['error']['message'] ?? 'Ad set pause failed');
+            }
+
+            Log::warning('AD_BUDGET_PAUSED_ADSET_FALLBACK', [
+                'ad_id' => $ad->id,
+                'adset_meta_id' => $adsetMetaId,
             ]);
         } catch (Throwable $e) {
-            Log::warning('AD_AUTO_PAUSE_BUDGET_FAILED', [
+            Log::critical('AD_BUDGET_ADSET_PAUSE_FAILED', [
                 'ad_id' => $ad->id,
+                'adset_meta_id' => $adsetMetaId,
                 'error' => $e->getMessage(),
             ]);
         }

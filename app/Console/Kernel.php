@@ -64,6 +64,12 @@ class Kernel extends ConsoleKernel
         | No need every minute → heavy DB writes
         */
 
+        $schedule->command('ads:enforce-budgets')
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->name('ads-enforce-budgets')
+            ->appendOutputTo(storage_path('logs/ad-budget-enforce.log'));
+
         $schedule->command('ads:reset-daily-budget')
             ->everyFiveMinutes()
             ->withoutOverlapping()

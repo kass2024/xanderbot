@@ -2,8 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Ad;
-use App\Services\MetaAdsService;
+use App\Services\AdBudgetEnforcementService;
 use App\Support\AdBudgetGuard;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
@@ -15,8 +14,9 @@ class ResetDailyAdBudgets extends Command
 
     protected $description = 'Reset daily spend counters and enforce per-ad budget pauses (no auto-resume)';
 
-    public function __construct(protected MetaAdsService $meta)
-    {
+    public function __construct(
+        protected AdBudgetEnforcementService $enforcer,
+    ) {
         parent::__construct();
     }
 
@@ -24,9 +24,8 @@ class ResetDailyAdBudgets extends Command
     {
         $today = Carbon::today()->toDateString();
         $reset = 0;
-        $paused = 0;
 
-        foreach (Ad::whereNotNull('meta_ad_id')->cursor() as $ad) {
+        foreach (\App\Models\Ad::whereNotNull('meta_ad_id')->cursor() as $ad) {
             try {
                 if (! $ad->spend_date || $ad->spend_date->toDateString() !== $today) {
                     $payload = AdBudgetGuard::filterPersistablePayload([
@@ -37,14 +36,6 @@ class ResetDailyAdBudgets extends Command
                     $ad->update($payload);
                     $reset++;
                 }
-
-                $wasActive = $ad->status === Ad::STATUS_ACTIVE;
-                AdBudgetGuard::enforce($ad, $this->meta);
-                $ad->refresh();
-
-                if ($wasActive && $ad->status === Ad::STATUS_PAUSED && AdBudgetGuard::isBudgetLimitPaused($ad)) {
-                    $paused++;
-                }
             } catch (\Throwable $e) {
                 Log::error('BUDGET_RESET_AD_FAILED', [
                     'ad_id' => $ad->id,
@@ -53,7 +44,16 @@ class ResetDailyAdBudgets extends Command
             }
         }
 
-        $this->info("Reset: {$reset} | Auto-paused for budget: {$paused}");
+        $stats = $this->enforcer->enforceAll();
+
+        $this->info(sprintf(
+            'Reset: %d | Checked: %d | Paused: %d | Re-paused: %d | Errors: %d',
+            $reset,
+            $stats['checked'],
+            $stats['paused'],
+            $stats['re_paused'],
+            $stats['errors'],
+        ));
 
         return Command::SUCCESS;
     }

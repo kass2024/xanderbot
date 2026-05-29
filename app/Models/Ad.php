@@ -265,6 +265,30 @@ protected $fillable = [
         return !empty($this->meta_ad_id);
     }
 
+    /**
+     * Current + legacy Meta ad ids (IG reprovision keeps spend on old ids).
+     *
+     * @return list<string>
+     */
+    public function metaIdsForMetrics(): array
+    {
+        $ids = [];
+
+        if (! empty($this->meta_ad_id)) {
+            $ids[] = (string) $this->meta_ad_id;
+        }
+
+        foreach (is_array($this->previous_meta_ad_ids) ? $this->previous_meta_ad_ids : [] as $legacyId) {
+            $legacyId = (string) $legacyId;
+
+            if ($legacyId !== '' && ! in_array($legacyId, $ids, true)) {
+                $ids[] = $legacyId;
+            }
+        }
+
+        return $ids;
+    }
+
     public function hasReachedDailyBudget(): bool
     {
         if ((float) $this->daily_budget <= 0) {
@@ -280,11 +304,16 @@ protected $fillable = [
 
     public function displayDailySpend(): float
     {
+        $budget = (float) ($this->daily_budget ?? 0);
+
         if ($this->status === self::STATUS_PAUSED) {
+            if (in_array($this->pause_reason, ['budget_limit', 'budget'], true) && $budget > 0) {
+                return $budget;
+            }
+
             return 0;
         }
 
-        $budget = (float) ($this->daily_budget ?? 0);
         $spent = (float) ($this->daily_spend ?? 0);
 
         if ($budget > 0) {
