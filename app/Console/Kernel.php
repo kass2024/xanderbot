@@ -19,8 +19,8 @@ class Kernel extends ConsoleKernel
         */
 
         $schedule->command('meta:sync-ads')
-            ->everyFiveMinutes()
-            ->withoutOverlapping()
+            ->everyFifteenMinutes()
+            ->withoutOverlapping(20)
             ->name('meta-sync-ads')
             ->before(fn () => Log::info('META_SYNC_START', ['time' => now()]))
             ->after(fn () => Log::info('META_SYNC_DONE', ['time' => now()]))
@@ -65,8 +65,8 @@ class Kernel extends ConsoleKernel
         */
 
         $schedule->command('ads:enforce-budgets')
-            ->everyMinute()
-            ->withoutOverlapping()
+            ->everyTwoMinutes()
+            ->withoutOverlapping(3)
             ->name('ads-enforce-budgets')
             ->appendOutputTo(storage_path('logs/ad-budget-enforce.log'));
 

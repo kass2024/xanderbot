@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Ad;
 use App\Models\AdAccount;
 use App\Support\AdBudgetGuard;
+use App\Support\MetaRateLimit;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
@@ -23,6 +24,14 @@ class AdBudgetEnforcementService
     public function enforceAll(): array
     {
         $stats = ['checked' => 0, 'paused' => 0, 're_paused' => 0, 'errors' => 0];
+
+        if (MetaRateLimit::isBlocked()) {
+            Log::info('AD_BUDGET_ENFORCE_SKIPPED_RATE_LIMIT', [
+                'until' => MetaRateLimit::blockedUntil()?->toDateTimeString(),
+            ]);
+
+            return $stats;
+        }
 
         $ads = Ad::query()
             ->whereNotNull('meta_ad_id')
@@ -63,6 +72,16 @@ class AdBudgetEnforcementService
                 }
             } catch (Throwable $e) {
                 $stats['errors']++;
+
+                if (MetaRateLimit::recordFromMessage($e->getMessage())) {
+                    Log::warning('AD_BUDGET_ENFORCE_STOPPED_RATE_LIMIT', [
+                        'ad_id' => $ad->id,
+                        'until' => MetaRateLimit::blockedUntil()?->toDateTimeString(),
+                    ]);
+
+                    break;
+                }
+
                 Log::error('AD_BUDGET_ENFORCE_FAILED', [
                     'ad_id' => $ad->id,
                     'error' => $e->getMessage(),
@@ -95,6 +114,14 @@ class AdBudgetEnforcementService
             try {
                 $maps[$accountId] = $this->meta->getAdInsightsMap($accountId, 'today');
             } catch (Throwable $e) {
+                if (MetaRateLimit::recordFromMessage($e->getMessage())) {
+                    Log::warning('AD_BUDGET_TODAY_INSIGHTS_RATE_LIMIT', [
+                        'account_id' => $accountId,
+                    ]);
+
+                    return $maps;
+                }
+
                 Log::warning('AD_BUDGET_TODAY_INSIGHTS_FAILED', [
                     'account_id' => $accountId,
                     'error' => $e->getMessage(),

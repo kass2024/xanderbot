@@ -13,6 +13,16 @@ class EnforceAdBudgets extends Command
 
     public function handle(AdBudgetEnforcementService $enforcer): int
     {
+        if (\App\Support\MetaRateLimit::isBlocked()) {
+            $until = \App\Support\MetaRateLimit::blockedUntil();
+            $this->warn(sprintf(
+                'Meta API rate limit cooldown until %s — skipping budget enforcement.',
+                $until?->toDateTimeString() ?? 'later'
+            ));
+
+            return Command::SUCCESS;
+        }
+
         $stats = $enforcer->enforceAll();
 
         $this->line(sprintf(
