@@ -62,7 +62,8 @@ required>
 
 <option
 value="{{ $campaign->id }}"
-data-objective="{{ $campaign->objective }}">
+data-objective="{{ $campaign->objective }}"
+@if((string) old('campaign_id', $selectedCampaign ?? '') === (string) $campaign->id) selected @endif>
 
 {{ $campaign->name }} ({{ $campaign->objective }})
 
@@ -115,28 +116,23 @@ Minimum recommended: $5/day
 
 
 
-{{-- OPTIMIZATION --}}
+{{-- OPTIMIZATION (auto-detected from campaign objective) --}}
 <div class="mb-6">
 
 <label class="font-semibold block mb-2">
-Optimization Goal
+Performance Goal
 </label>
 
-<select
-name="optimization_goal"
-id="optimization-goal"
-class="w-full rounded-xl border border-slate-200 px-4 py-3 shadow-sm focus:border-xander-navy focus:ring-2 focus:ring-xander-navy/20"
-required>
+<input type="hidden" name="optimization_goal" id="optimization-goal" value="{{ old('optimization_goal', 'LANDING_PAGE_VIEWS') }}">
 
-<option value="LINK_CLICKS">Link Clicks</option>
-<option value="LANDING_PAGE_VIEWS">Landing Page Views</option>
-<option value="REACH">Reach</option>
-<option value="IMPRESSIONS">Impressions</option>
-<option value="LEAD_GENERATION">Lead Generation</option>
-<option value="OFFSITE_CONVERSIONS">Conversions</option>
-<option value="POST_ENGAGEMENT">Post Engagement</option>
+<div id="optimization-goal-display"
+class="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+Select a campaign to auto-detect the performance goal.
+</div>
 
-</select>
+<p class="text-xs text-gray-500 mt-1">
+Matched automatically to your campaign objective on Meta. If Meta rejects a goal, the server retries compatible alternatives.
+</p>
 
 </div>
 
@@ -576,10 +572,20 @@ fetch("/admin/meta/interests?q="+query)
 
 
 
-const rules = {
+const goalLabels = {
+LINK_CLICKS: "Link Clicks",
+LANDING_PAGE_VIEWS: "Landing Page Views",
+REACH: "Reach",
+IMPRESSIONS: "Impressions",
+LEAD_GENERATION: "Lead Generation",
+OFFSITE_CONVERSIONS: "Conversions",
+POST_ENGAGEMENT: "Post Engagement",
+APP_INSTALLS: "App Installs"
+};
 
-TRAFFIC: "LINK_CLICKS",
-OUTCOME_TRAFFIC: "LINK_CLICKS",
+const rules = {
+TRAFFIC: "LANDING_PAGE_VIEWS",
+OUTCOME_TRAFFIC: "LANDING_PAGE_VIEWS",
 AWARENESS: "REACH",
 OUTCOME_AWARENESS: "REACH",
 ENGAGEMENT: "POST_ENGAGEMENT",
@@ -587,27 +593,38 @@ OUTCOME_ENGAGEMENT: "POST_ENGAGEMENT",
 LEADS: "LEAD_GENERATION",
 OUTCOME_LEADS: "LEAD_GENERATION",
 SALES: "OFFSITE_CONVERSIONS",
-OUTCOME_SALES: "OFFSITE_CONVERSIONS"
-
+OUTCOME_SALES: "OFFSITE_CONVERSIONS",
+APP_PROMOTION: "APP_INSTALLS",
+OUTCOME_APP_PROMOTION: "APP_INSTALLS"
 };
 
+function applyOptimizationGoalForCampaign(selectEl){
+const option = selectEl.selectedOptions[0];
+const obj = option?.dataset?.objective || "";
+const goalInput = document.getElementById("optimization-goal");
+const goalDisplay = document.getElementById("optimization-goal-display");
+const info = document.getElementById("objective-info");
 
+if(!obj){
+goalInput.value = "LANDING_PAGE_VIEWS";
+goalDisplay.innerText = "Select a campaign to auto-detect the performance goal.";
+info.classList.add("hidden");
+return;
+}
 
-document.getElementById("campaign-select")
-.addEventListener("change",function(){
+const goal = rules[obj] ?? "LANDING_PAGE_VIEWS";
+goalInput.value = goal;
+goalDisplay.innerText = (goalLabels[goal] ?? goal) + " (for " + obj + ")";
+info.classList.remove("hidden");
+info.innerText = "Performance goal auto-selected for " + obj + ". Server will retry other compatible goals if Meta rejects this one.";
+}
 
-let obj = this.selectedOptions[0].dataset.objective;
-
-let goal = rules[obj] ?? "LINK_CLICKS";
-
-document.getElementById("optimization-goal").value = goal;
-
-document.getElementById("objective-info").classList.remove("hidden");
-
-document.getElementById("objective-info").innerText =
-"Optimization automatically configured for "+obj;
-
+const campaignSelect = document.getElementById("campaign-select");
+campaignSelect.addEventListener("change", function(){
+applyOptimizationGoalForCampaign(this);
 });
+
+applyOptimizationGoalForCampaign(campaignSelect);
 
 
 

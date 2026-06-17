@@ -124,7 +124,7 @@ class AdSetController extends Controller
 
             'daily_budget' => 'required|numeric|min:5',
 
-            'optimization_goal' => 'required|string|in:LINK_CLICKS,LANDING_PAGE_VIEWS,REACH,IMPRESSIONS,LEAD_GENERATION,OFFSITE_CONVERSIONS,POST_ENGAGEMENT',
+            'optimization_goal' => 'nullable|string|in:LINK_CLICKS,LANDING_PAGE_VIEWS,REACH,IMPRESSIONS,LEAD_GENERATION,OFFSITE_CONVERSIONS,POST_ENGAGEMENT',
 
             'bid_strategy' => 'required|string|in:LOWEST_COST_WITHOUT_CAP',
 
@@ -181,65 +181,31 @@ class AdSetController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | OPTIMIZATION SETTINGS
+            | OPTIMIZATION SETTINGS (sync objective from Meta, auto-pick goal)
             |--------------------------------------------------------------------------
             */
 
-            $objective = strtoupper((string) $campaign->objective);
+            $metaCampaign = $this->meta->getCampaign($campaign->meta_id);
+            $metaObjective = $this->meta->normalizeCampaignObjective(
+                (string) ($metaCampaign['objective'] ?? $campaign->objective)
+            );
 
-            $optimizationMap = [
+            if ($metaObjective === '') {
+                throw new Exception('Campaign objective missing on Meta and locally.');
+            }
 
-                'TRAFFIC' => 'LINK_CLICKS',
-                'OUTCOME_TRAFFIC' => 'LINK_CLICKS',
+            if ($metaObjective !== $this->meta->normalizeCampaignObjective((string) $campaign->objective)) {
+                $campaign->update(['objective' => $metaObjective]);
 
-                'LEADS' => 'LEAD_GENERATION',
-                'OUTCOME_LEADS' => 'LEAD_GENERATION',
+                Log::info('CAMPAIGN_OBJECTIVE_SYNCED', [
+                    'campaign_id' => $campaign->id,
+                    'meta_id' => $campaign->meta_id,
+                    'objective' => $metaObjective,
+                ]);
+            }
 
-                'SALES' => 'OFFSITE_CONVERSIONS',
-                'OUTCOME_SALES' => 'OFFSITE_CONVERSIONS',
-
-                'AWARENESS' => 'REACH',
-                'OUTCOME_AWARENESS' => 'REACH',
-
-                'ENGAGEMENT' => 'POST_ENGAGEMENT',
-                'OUTCOME_ENGAGEMENT' => 'POST_ENGAGEMENT',
-            ];
-
-            $allowedByObjective = [
-
-                'TRAFFIC' => ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'REACH', 'IMPRESSIONS'],
-                'OUTCOME_TRAFFIC' => ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'REACH', 'IMPRESSIONS'],
-
-                'LEADS' => ['LEAD_GENERATION', 'IMPRESSIONS'],
-                'OUTCOME_LEADS' => ['LEAD_GENERATION', 'IMPRESSIONS'],
-
-                'SALES' => ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'LANDING_PAGE_VIEWS'],
-                'OUTCOME_SALES' => ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'LANDING_PAGE_VIEWS'],
-
-                'AWARENESS' => ['REACH', 'IMPRESSIONS'],
-                'OUTCOME_AWARENESS' => ['REACH', 'IMPRESSIONS'],
-
-                'ENGAGEMENT' => ['POST_ENGAGEMENT', 'IMPRESSIONS', 'REACH'],
-                'OUTCOME_ENGAGEMENT' => ['POST_ENGAGEMENT', 'IMPRESSIONS', 'REACH'],
-            ];
-
-            $defaultGoal = $optimizationMap[$objective] ?? 'LINK_CLICKS';
-
-            $allowed = $allowedByObjective[$objective] ?? [
-                'LINK_CLICKS',
-                'LANDING_PAGE_VIEWS',
-                'REACH',
-                'IMPRESSIONS',
-                'LEAD_GENERATION',
-                'OFFSITE_CONVERSIONS',
-                'POST_ENGAGEMENT',
-            ];
-
-            $requestedGoal = $data['optimization_goal'];
-
-            $optimizationGoal = in_array($requestedGoal, $allowed, true)
-                ? $requestedGoal
-                : $defaultGoal;
+            $requestedGoal = $data['optimization_goal'] ?? null;
+            $optimizationGoal = $this->meta->resolveOptimizationGoal($metaObjective, $requestedGoal);
 
             $billingEvent = 'IMPRESSIONS';
 
@@ -272,6 +238,8 @@ class AdSetController extends Controller
 
                 'optimization_goal' => $optimizationGoal,
 
+                'campaign_objective' => $metaObjective,
+
                 'bid_strategy' => 'LOWEST_COST_WITHOUT_CAP',
 
                 'status' => 'PAUSED',
@@ -289,50 +257,15 @@ class AdSetController extends Controller
 
             Log::info('META_ADSET_PAYLOAD', $payload);
 
-            /*
-            |--------------------------------------------------------------------------
-            | CREATE META ADSET
-            |--------------------------------------------------------------------------
-            | Meta may reject interest IDs (subcode 1870247) when interests are merged
-            | or deprecated; the error lists alternatives — patch and retry a few times.
-            |--------------------------------------------------------------------------
-            */
+            $created = $this->meta->createAdSetResilient(
+                $accountId,
+                $payload,
+                $metaObjective
+            );
 
-            $targetingForMeta = $targeting;
-            $response = null;
-
-            for ($metaAttempt = 0; $metaAttempt < 5; $metaAttempt++) {
-                $payload['targeting'] = $targetingForMeta;
-
-                try {
-                    $response = $this->meta->createAdSet(
-                        $accountId,
-                        $payload
-                    );
-                    break;
-                } catch (Throwable $e) {
-                    if ($metaAttempt === 4) {
-                        throw $e;
-                    }
-
-                    $patched = $this->meta->patchTargetingFrom1870247Error(
-                        $targetingForMeta,
-                        $e->getMessage()
-                    );
-
-                    if ($patched === null) {
-                        throw $e;
-                    }
-
-                    $targetingForMeta = $patched;
-
-                    Log::info('META_ADSET_1870247_PATCH_RETRY', [
-                        'attempt' => $metaAttempt + 1,
-                    ]);
-                }
-            }
-
-            $targeting = $targetingForMeta;
+            $response = $created['response'];
+            $optimizationGoal = $created['optimization_goal'];
+            $targeting = $created['targeting'];
 
             Log::info('META_ADSET_RESPONSE', $response);
 

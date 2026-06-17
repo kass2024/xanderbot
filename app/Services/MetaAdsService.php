@@ -1174,6 +1174,147 @@ protected function buildTargeting(array $targeting): array
         return $this->applyFacebookInstagramPlacements($targeting);
     }
 
+    public function normalizeCampaignObjective(?string $objective): string
+    {
+        return strtoupper(trim((string) $objective));
+    }
+
+    /**
+     * Ordered optimization goals to try for a campaign objective (Meta ODAX).
+     *
+     * @return list<string>
+     */
+    public function optimizationGoalCandidates(string $objective, ?string $preferred = null): array
+    {
+        $objective = $this->normalizeCampaignObjective($objective);
+
+        $byObjective = [
+            'OUTCOME_TRAFFIC' => ['LANDING_PAGE_VIEWS', 'LINK_CLICKS', 'REACH'],
+            'TRAFFIC' => ['LANDING_PAGE_VIEWS', 'LINK_CLICKS', 'REACH'],
+            'OUTCOME_LEADS' => ['LEAD_GENERATION'],
+            'LEADS' => ['LEAD_GENERATION'],
+            'OUTCOME_SALES' => ['OFFSITE_CONVERSIONS', 'LANDING_PAGE_VIEWS', 'LINK_CLICKS'],
+            'SALES' => ['OFFSITE_CONVERSIONS', 'LANDING_PAGE_VIEWS', 'LINK_CLICKS'],
+            'OUTCOME_AWARENESS' => ['REACH', 'IMPRESSIONS'],
+            'AWARENESS' => ['REACH', 'IMPRESSIONS'],
+            'OUTCOME_ENGAGEMENT' => ['POST_ENGAGEMENT', 'REACH'],
+            'ENGAGEMENT' => ['POST_ENGAGEMENT', 'REACH'],
+            'OUTCOME_APP_PROMOTION' => ['APP_INSTALLS', 'LINK_CLICKS'],
+            'APP_PROMOTION' => ['APP_INSTALLS', 'LINK_CLICKS'],
+        ];
+
+        $candidates = $byObjective[$objective] ?? [
+            'LANDING_PAGE_VIEWS',
+            'LINK_CLICKS',
+            'REACH',
+            'IMPRESSIONS',
+            'LEAD_GENERATION',
+            'OFFSITE_CONVERSIONS',
+            'POST_ENGAGEMENT',
+        ];
+
+        if ($preferred !== null) {
+            $preferred = strtoupper(trim($preferred));
+            if ($preferred !== '' && in_array($preferred, $candidates, true)) {
+                $candidates = array_values(array_unique(array_merge([$preferred], $candidates)));
+            }
+        }
+
+        return $candidates;
+    }
+
+    public function resolveOptimizationGoal(string $objective, ?string $requested = null): string
+    {
+        $candidates = $this->optimizationGoalCandidates($objective, $requested);
+
+        return $candidates[0];
+    }
+
+    public function isOptimizationGoalMismatchError(string $message): bool
+    {
+        return str_contains($message, '2490408')
+            || str_contains($message, "Performance goal isn't available")
+            || (str_contains($message, 'optimization_goal') && str_contains($message, 'Invalid parameter'));
+    }
+
+    /**
+     * Create an ad set, auto-picking a valid optimization goal and retrying on Meta 2490408.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array{response: array, optimization_goal: string, targeting: array}
+     */
+    public function createAdSetResilient(string $accountId, array $data, string $campaignObjective): array
+    {
+        $preferred = isset($data['optimization_goal']) ? (string) $data['optimization_goal'] : null;
+        $goals = $this->optimizationGoalCandidates($campaignObjective, $preferred);
+        $targeting = $data['targeting'] ?? [];
+
+        if (! is_array($targeting)) {
+            throw new Exception('Invalid targeting structure');
+        }
+
+        $lastError = null;
+
+        foreach ($goals as $goal) {
+            $data['optimization_goal'] = $goal;
+            $targetingForMeta = $targeting;
+
+            for ($attempt = 0; $attempt < 5; $attempt++) {
+                $data['targeting'] = $targetingForMeta;
+
+                try {
+                    $response = $this->createAdSet($accountId, $data);
+
+                    Log::info('META_ADSET_GOAL_RESOLVED', [
+                        'campaign_objective' => $this->normalizeCampaignObjective($campaignObjective),
+                        'optimization_goal' => $goal,
+                        'attempt' => $attempt + 1,
+                    ]);
+
+                    return [
+                        'response' => $response,
+                        'optimization_goal' => $goal,
+                        'targeting' => $targetingForMeta,
+                    ];
+                } catch (Exception $e) {
+                    $patched = $this->patchTargetingFrom1870247Error(
+                        $targetingForMeta,
+                        $e->getMessage()
+                    );
+
+                    if ($patched !== null) {
+                        $targetingForMeta = $patched;
+
+                        Log::info('META_ADSET_1870247_PATCH_RETRY', [
+                            'optimization_goal' => $goal,
+                            'attempt' => $attempt + 1,
+                        ]);
+
+                        continue;
+                    }
+
+                    if ($this->isOptimizationGoalMismatchError($e->getMessage())) {
+                        $lastError = $e;
+
+                        Log::warning('META_ADSET_GOAL_RETRY', [
+                            'campaign_objective' => $this->normalizeCampaignObjective($campaignObjective),
+                            'failed_goal' => $goal,
+                            'error' => $e->getMessage(),
+                        ]);
+
+                        break;
+                    }
+
+                    throw $e;
+                }
+            }
+        }
+
+        throw $lastError ?? new Exception(
+            'Unable to find a performance goal compatible with campaign objective '.$campaignObjective.'.'
+        );
+    }
+
    /*
 |--------------------------------------------------------------------------
 | ADSET
@@ -1262,7 +1403,10 @@ if (!is_array($targeting)) {
 
         'billing_event' => $data['billing_event'] ?? 'IMPRESSIONS',
 
-        'optimization_goal' => $data['optimization_goal'] ?? 'LINK_CLICKS',
+        'optimization_goal' => $data['optimization_goal'] ?? $this->resolveOptimizationGoal(
+            (string) ($data['campaign_objective'] ?? 'OUTCOME_TRAFFIC'),
+            isset($data['optimization_goal']) ? (string) $data['optimization_goal'] : null
+        ),
 
         'bid_strategy' => $data['bid_strategy'] ?? 'LOWEST_COST_WITHOUT_CAP',
 
