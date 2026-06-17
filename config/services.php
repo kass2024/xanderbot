@@ -22,7 +22,7 @@ return [
         'client_secret' => env('FB_APP_SECRET'),
         'redirect'      => env('FB_REDIRECT_URI'),
 
-        'graph_version' => env('FB_GRAPH_VERSION', 'v19.0'),
+        'graph_version' => env('FB_GRAPH_VERSION', 'v22.0'),
         'graph_url'     => env('FB_GRAPH_URL', 'https://graph.facebook.com'),
         'oauth_url'     => env('FB_OAUTH_URL', 'https://www.facebook.com'),
     ],
@@ -38,10 +38,10 @@ return [
         'app_secret'   => env('META_APP_SECRET'),
         'redirect_uri' => env('META_REDIRECT_URI'),
 
-        'graph_version' => env('META_GRAPH_VERSION', 'v19.0'),
+        'graph_version' => env('META_GRAPH_VERSION', 'v22.0'),
         'graph_url'     => env('META_GRAPH_URL', 'https://graph.facebook.com'),
         'oauth_url'     => env('META_OAUTH_URL', 'https://www.facebook.com'),
-         
+
     'token' => env('META_SYSTEM_USER_TOKEN'),
     'ad_account_id' => env('META_AD_ACCOUNT_ID'),
      'page_id' => env('META_PAGE_ID'),
@@ -86,7 +86,7 @@ return [
     */
     'whatsapp' => [
 
-       'graph_version' => env('META_GRAPH_VERSION', 'v19.0'),
+       'graph_version' => env('META_GRAPH_VERSION', 'v22.0'),
     'graph_url'     => env('META_GRAPH_URL', 'https://graph.facebook.com'),
     'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
     'access_token'    => env('WHATSAPP_ACCESS_TOKEN'),

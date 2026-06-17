@@ -15,7 +15,7 @@ class MetaAdsService
 
     public function __construct()
     {
-        $version = config('services.meta.graph_version','v19.0');
+        $version = config('services.meta.graph_version', 'v22.0');
 
         $this->baseUrl = "https://graph.facebook.com/{$version}";
         $this->accessToken = config('services.meta.token');
@@ -292,9 +292,25 @@ protected function handleError($response, $endpoint, $payload = [])
     |--------------------------------------------------------------------------
     */
 
-    protected function delete(string $endpoint):array
+    protected function delete(string $endpoint): array
     {
-        return $this->request('delete',$endpoint,[],false);
+        Log::info('META_API_delete', [
+            'endpoint' => $endpoint,
+            'payload' => ['access_token' => '[redacted]'],
+        ]);
+
+        // Meta Graph DELETE requires access_token as a query param, not a JSON body.
+        $url = "{$this->baseUrl}/{$endpoint}?" . http_build_query([
+            'access_token' => $this->accessToken,
+        ]);
+
+        $response = $this->client()->delete($url);
+
+        if ($response->failed()) {
+            $this->handleError($response, $endpoint, []);
+        }
+
+        return $response->json();
     }
 
     /*
