@@ -306,8 +306,12 @@ $adset = AdSet::create([
             DB::commit();
 
             return redirect()
-                ->route('admin.campaigns.index')
-                ->with('success', 'Ad Set created successfully');
+                ->route('admin.creatives.create', [
+                    'campaign' => $campaign->id,
+                    'adset' => $adset->id,
+                    'page' => $data['page_id'],
+                ])
+                ->with('success', 'Ad set created. Continue with your creative, then your ad.');
 
         }
 

@@ -1002,14 +1002,53 @@ protected function buildTargeting(array $targeting): array
 
     /*
     |--------------------------------------------------------------------------
-    | Advantage audience: omit unless already set (safer across API versions)
+    | Advantage audience: Meta API v19+ requires explicit flag (subcode 1870227)
     |--------------------------------------------------------------------------
     */
+
+    $targeting = $this->applyAdvantageAudienceFlag($targeting);
 
     Log::info('META_TARGETING_FINAL', $targeting);
 
     return $targeting;
 }
+
+    /**
+     * Meta requires advantage_audience to be explicitly 1 or 0 in targeting_automation.
+     *
+     * @param  array<string, mixed>  $targeting
+     * @return array<string, mixed>
+     */
+    public function applyAdvantageAudienceFlag(array $targeting): array
+    {
+        if (isset($targeting['targeting_automation']['advantage_audience'])) {
+            $targeting['targeting_automation']['advantage_audience'] = (int) $targeting['targeting_automation']['advantage_audience'] ? 1 : 0;
+
+            return $targeting;
+        }
+
+        $targeting['targeting_automation'] = [
+            'advantage_audience' => $this->shouldEnableAdvantageAudience($targeting) ? 1 : 0,
+        ];
+
+        return $targeting;
+    }
+
+    /**
+     * @param  array<string, mixed>  $targeting
+     */
+    protected function shouldEnableAdvantageAudience(array $targeting): bool
+    {
+        if (! empty($targeting['flexible_spec'])) {
+            return false;
+        }
+
+        if (! empty($targeting['genders']) || isset($targeting['age_min'], $targeting['age_max'])) {
+            return false;
+        }
+
+        return false;
+    }
 
     /**
      * Meta subcode 1870247: some interest IDs were merged/deprecated. The error_user_msg

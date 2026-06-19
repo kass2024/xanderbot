@@ -21,6 +21,12 @@
 </div>
 
 
+@if(session('success'))
+<div class="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+{{ session('success') }}
+</div>
+@endif
+
 @if($errors->any())
 <div class="mb-6 bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
 <ul class="list-disc ml-6">
@@ -57,7 +63,7 @@ required>
 
 @foreach($campaigns as $campaign)
 
-<option value="{{ $campaign->id }}">
+<option value="{{ $campaign->id }}" @selected((string) old('campaign_id', $selectedCampaign ?? '') === (string) $campaign->id)>
 {{ $campaign->name }}
 </option>
 
@@ -86,7 +92,7 @@ required>
 
 @foreach($adsets as $adset)
 
-<option value="{{ $adset->id }}">
+<option value="{{ $adset->id }}" @selected((string) old('adset_id', $selectedAdset ?? '') === (string) $adset->id)>
 {{ $adset->name }}
 </option>
 
@@ -114,7 +120,7 @@ required>
 
 @foreach($pages as $page)
 
-<option value="{{ $page['id'] }}">
+<option value="{{ $page['id'] }}" @selected((string) old('page_id', $selectedPage ?? '') === (string) $page['id'])>
 {{ $page['name'] }}
 </option>
 

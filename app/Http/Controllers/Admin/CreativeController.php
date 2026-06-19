@@ -74,11 +74,14 @@ class CreativeController extends Controller
 
         $pages = $this->meta->getPages();
 
-        return view('admin.creatives.create', compact(
-            'campaigns',
-            'adsets',
-            'pages'
-        ));
+        return view('admin.creatives.create', [
+            'campaigns' => $campaigns,
+            'adsets' => $adsets,
+            'pages' => $pages,
+            'selectedCampaign' => request('campaign'),
+            'selectedAdset' => request('adset'),
+            'selectedPage' => request('page'),
+        ]);
     }
 
     /*
@@ -363,8 +366,12 @@ class CreativeController extends Controller
 
 
             return redirect()
-                ->route('admin.creatives.index')
-                ->with('success', 'Creative created and synced.');
+                ->route('admin.ads.create', [
+                    'adset' => $creative->adset_id,
+                    'creative' => $creative->id,
+                    'name' => $creative->name,
+                ])
+                ->with('success', 'Creative created. Finish by creating your ad.');
 
         } catch (Throwable $e) {
 
