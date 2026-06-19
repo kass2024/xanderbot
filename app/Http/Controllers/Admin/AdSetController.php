@@ -146,6 +146,8 @@ class AdSetController extends Controller
 
             'interests' => 'nullable|array|max:5',
 
+            'interests_json' => 'nullable|string',
+
             'placement_type' => 'required|in:automatic,manual',
 
             'publisher_platforms' => 'nullable|array'
@@ -550,19 +552,25 @@ public function edit(AdSet $adset)
     |--------------------------------------------------------------------------
     */
 
-  $interests = [];
+    $interests = [];
+    $interestOptions = [];
 
-if (!empty($targeting['flexible_spec'][0]['interests'])) {
+    if (! empty($targeting['flexible_spec'][0]['interests'])) {
+        foreach ($targeting['flexible_spec'][0]['interests'] as $interest) {
+            $id = (string) ($interest['id'] ?? '');
+            if ($id === '') {
+                continue;
+            }
 
-    foreach ($targeting['flexible_spec'][0]['interests'] as $interest) {
-
-        $interests[] = $interest['id'];
-
+            $interests[] = $id;
+            $interestOptions[] = [
+                'id' => $id,
+                'name' => (string) ($interest['name'] ?? $id),
+            ];
+        }
     }
 
-}
-
-$adset->interests = $interests;
+    $adset->interests = $interests;
 
     /*
     |--------------------------------------------------------------------------
@@ -579,14 +587,13 @@ $adset->interests = $interests;
         : 'automatic';
 
 
-    return view('admin.adsets.edit',[
-
-        'adset'=>$adset,
-        'campaigns'=>$campaigns,
-        'countries'=>$countries,
-        'languages'=>$languages,
-        'pages'=>$pages
-
+    return view('admin.adsets.edit', [
+        'adset' => $adset,
+        'campaigns' => $campaigns,
+        'countries' => $countries,
+        'languages' => $languages,
+        'pages' => $pages,
+        'interestOptions' => $interestOptions,
     ]);
 }
 public function update(Request $request, AdSet $adset)
@@ -611,6 +618,7 @@ public function update(Request $request, AdSet $adset)
         'genders' => 'nullable|array',
         'languages' => 'nullable|array',
         'interests' => 'nullable|array|max:5',
+        'interests_json' => 'nullable|string',
 
         'placement_type' => 'required|in:automatic,manual',
         'publisher_platforms' => 'nullable|array'
@@ -745,11 +753,33 @@ public function update(Request $request, AdSet $adset)
 
         if (! empty($data['interests'])) {
             $interestList = [];
+            $interestNames = [];
+
+            if (! empty($data['interests_json'])) {
+                $decodedInterests = json_decode($data['interests_json'], true);
+                if (is_array($decodedInterests)) {
+                    foreach ($decodedInterests as $interest) {
+                        if (! is_array($interest)) {
+                            continue;
+                        }
+
+                        $id = (string) ($interest['id'] ?? '');
+                        if ($id !== '') {
+                            $interestNames[$id] = (string) ($interest['name'] ?? $id);
+                        }
+                    }
+                }
+            }
 
             foreach ($data['interests'] as $interestId) {
-                $interestList[] = [
-                    'id' => (string) $interestId,
-                ];
+                $id = (string) $interestId;
+                $entry = ['id' => $id];
+
+                if (! empty($interestNames[$id])) {
+                    $entry['name'] = $interestNames[$id];
+                }
+
+                $interestList[] = $entry;
             }
 
             $targeting['flexible_spec'] = [[
