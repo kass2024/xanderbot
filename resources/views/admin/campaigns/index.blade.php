@@ -136,7 +136,7 @@
                                         <button type="submit" class="w-full rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200/80 transition hover:bg-white">Sync</button>
                                     </form>
                                     <a href="{{ route('admin.campaigns.edit', $campaign) }}" class="rounded-lg bg-slate-50 px-2.5 py-1.5 text-center text-xs font-semibold text-slate-800 ring-1 ring-slate-200/80 transition hover:bg-white">Edit</a>
-                                    <form action="{{ route('admin.campaigns.destroy', $campaign) }}" method="POST" class="m-0" onsubmit="return confirm('Delete this campaign?');">
+                                    <form action="{{ route('admin.campaigns.destroy', $campaign) }}" method="POST" class="m-0" onsubmit="return confirm('Delete this campaign completely? This removes ad sets, ads, and archives it on Meta.');">
                                         @csrf
                                         @method('DELETE')
                                         <button type="submit" class="w-full rounded-lg bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-red-600/15 transition hover:bg-red-100">Delete</button>

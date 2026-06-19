@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use App\Services\MetaAdsService;
 use App\Models\Campaign;
+use App\Support\MetaDeletedCampaigns;
 
 class SyncMetaCampaigns extends Command
 {
@@ -49,8 +50,13 @@ class SyncMetaCampaigns extends Command
             $count = 0;
 
             foreach ($response['data'] as $campaign) {
+                $metaId = (string) ($campaign['id'] ?? '');
 
-                if (empty($campaign['id'])) {
+                if ($metaId === '' || MetaDeletedCampaigns::contains($metaId)) {
+                    continue;
+                }
+
+                if (strtoupper((string) ($campaign['status'] ?? '')) === 'DELETED') {
                     continue;
                 }
 

@@ -10,7 +10,9 @@ use Illuminate\Support\Facades\Log;
 use App\Models\Campaign;
 use App\Models\AdAccount;
 use App\Models\AdSet;
+use App\Models\Creative;
 use App\Services\MetaAdsService;
+use App\Support\MetaDeletedCampaigns;
 
 use Illuminate\Support\Facades\Schema;
 use Throwable;
@@ -151,10 +153,9 @@ class CampaignController extends Controller
             |--------------------------------------------------------------------------
             */
 
-            if (Campaign::where('name',$data['name'])->exists()) {
-
+            if (Campaign::where('name', $data['name'])->exists()) {
                 return back()->withErrors([
-                    'name' => 'Campaign name already exists.'
+                    'name' => 'Campaign name already exists. Delete the existing campaign first, then create a new one.',
                 ])->withInput();
             }
 
@@ -366,26 +367,91 @@ class CampaignController extends Controller
 
     public function destroy(Campaign $campaign)
     {
-        try {
+        DB::beginTransaction();
 
-            Log::info('META_CAMPAIGN_DELETE',[
-                'campaign_id'=>$campaign->id,
-                'meta_id'=>$campaign->meta_id
+        try {
+            $campaign->load(['adSets.ads']);
+
+            $metaId = $campaign->meta_id;
+
+            Log::info('META_CAMPAIGN_DELETE', [
+                'campaign_id' => $campaign->id,
+                'meta_id' => $metaId,
             ]);
+
+            foreach ($campaign->adSets as $adSet) {
+                foreach ($adSet->ads as $ad) {
+                    if (! $ad->meta_ad_id) {
+                        continue;
+                    }
+
+                    try {
+                        $this->meta->deleteAd($ad->meta_ad_id);
+                    } catch (Throwable $e) {
+                        Log::warning('META_AD_DELETE_SKIPPED', [
+                            'meta_ad_id' => $ad->meta_ad_id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+
+                if ($adSet->meta_id) {
+                    try {
+                        $this->meta->deleteAdSet($adSet->meta_id);
+                    } catch (Throwable $e) {
+                        Log::warning('META_ADSET_DELETE_SKIPPED', [
+                            'meta_id' => $adSet->meta_id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+            }
+
+            if ($metaId) {
+                try {
+                    $this->meta->deleteCampaign($metaId);
+                } catch (Throwable $e) {
+                    try {
+                        $this->meta->updateCampaign($metaId, ['status' => 'DELETED']);
+                    } catch (Throwable $archiveError) {
+                        Log::warning('META_CAMPAIGN_ARCHIVE_FAILED', [
+                            'meta_id' => $metaId,
+                            'error' => $archiveError->getMessage(),
+                        ]);
+                    }
+                }
+
+                MetaDeletedCampaigns::remember($metaId);
+            }
+
+            Creative::query()
+                ->where('campaign_id', $campaign->id)
+                ->update([
+                    'campaign_id' => null,
+                    'adset_id' => null,
+                ]);
+
+            foreach ($campaign->adSets as $adSet) {
+                $adSet->ads()->delete();
+                $adSet->delete();
+            }
 
             $campaign->delete();
 
-            return back()->with('success','Campaign deleted.');
+            DB::commit();
+
+            return back()->with('success', 'Campaign deleted completely.');
 
         } catch (Throwable $e) {
+            DB::rollBack();
 
-            Log::error('META_CAMPAIGN_DELETE_FAILED',[
-                'campaign_id'=>$campaign->id,
-                'error'=>$e->getMessage()
+            Log::error('META_CAMPAIGN_DELETE_FAILED', [
+                'campaign_id' => $campaign->id,
+                'error' => $e->getMessage(),
             ]);
 
             return back()->withErrors([
-                'meta'=>'Unable to delete campaign.'
+                'meta' => 'Unable to delete campaign: '.$e->getMessage(),
             ]);
         }
     }

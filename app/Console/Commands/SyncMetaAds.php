@@ -6,6 +6,7 @@ use App\Models\Ad;
 use App\Models\AdAccount;
 use App\Models\AdSet;
 use App\Models\Campaign;
+use App\Support\MetaDeletedCampaigns;
 use App\Models\Creative;
 use App\Services\MetaAdsService;
 use App\Support\AdBudgetGuard;
@@ -75,6 +76,16 @@ class SyncMetaAds extends Command
             $campaigns = $this->safeMetaCall(fn () => $this->meta->getCampaigns($accountId));
 
             foreach ($campaigns['data'] ?? [] as $c) {
+                $metaId = (string) ($c['id'] ?? '');
+
+                if ($metaId === '' || MetaDeletedCampaigns::contains($metaId)) {
+                    continue;
+                }
+
+                if (strtoupper((string) ($c['status'] ?? '')) === 'DELETED') {
+                    continue;
+                }
+
                 Campaign::upsertFromMeta($c, $account->id);
             }
 
