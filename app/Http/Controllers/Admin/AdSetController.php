@@ -183,31 +183,28 @@ class AdSetController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | OPTIMIZATION SETTINGS (sync objective from Meta, auto-pick goal)
+            | OPTIMIZATION SETTINGS (local objective drives UI; Meta objective for API)
             |--------------------------------------------------------------------------
             */
 
-            $metaCampaign = $this->meta->getCampaign($campaign->meta_id);
-            $metaObjective = $this->meta->normalizeCampaignObjective(
-                (string) ($metaCampaign['objective'] ?? $campaign->objective)
-            );
+            $localObjective = $this->meta->normalizeCampaignObjective((string) $campaign->objective);
+            $metaCampaignObjective = $localObjective;
 
-            if ($metaObjective === '') {
+            if ($campaign->meta_id) {
+                $metaCampaign = $this->meta->getCampaign($campaign->meta_id);
+                $metaCampaignObjective = $this->meta->normalizeCampaignObjective(
+                    (string) ($metaCampaign['objective'] ?? $localObjective)
+                );
+            }
+
+            if ($metaCampaignObjective === '' && $localObjective === '') {
                 throw new Exception('Campaign objective missing on Meta and locally.');
             }
 
-            if ($metaObjective !== $this->meta->normalizeCampaignObjective((string) $campaign->objective)) {
-                $campaign->update(['objective' => $metaObjective]);
-
-                Log::info('CAMPAIGN_OBJECTIVE_SYNCED', [
-                    'campaign_id' => $campaign->id,
-                    'meta_id' => $campaign->meta_id,
-                    'objective' => $metaObjective,
-                ]);
-            }
+            $objectiveForGoals = $localObjective !== '' ? $localObjective : $metaCampaignObjective;
 
             $requestedGoal = $data['optimization_goal'] ?? null;
-            $optimizationGoal = $this->meta->resolveOptimizationGoal($metaObjective, $requestedGoal);
+            $optimizationGoal = $this->meta->resolveOptimizationGoal($objectiveForGoals, $requestedGoal);
 
             $billingEvent = 'IMPRESSIONS';
 
@@ -240,7 +237,7 @@ class AdSetController extends Controller
 
                 'optimization_goal' => $optimizationGoal,
 
-                'campaign_objective' => $metaObjective,
+                'campaign_objective' => $metaCampaignObjective,
 
                 'bid_strategy' => 'LOWEST_COST_WITHOUT_CAP',
 
@@ -262,7 +259,7 @@ class AdSetController extends Controller
             $created = $this->meta->createAdSetResilient(
                 $accountId,
                 $payload,
-                $metaObjective
+                $metaCampaignObjective
             );
 
             $response = $created['response'];

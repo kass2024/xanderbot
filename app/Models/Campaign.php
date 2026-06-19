@@ -257,6 +257,35 @@ class Campaign extends Model
             'status' => self::STATUS_COMPLETED
         ]);
     }
+
+    /**
+     * Sync campaign fields from Meta without overwriting a locally edited objective.
+     */
+    public static function upsertFromMeta(array $metaRow, ?int $adAccountId = null): self
+    {
+        $campaign = static::firstOrNew([
+            'meta_id' => (string) ($metaRow['id'] ?? ''),
+        ]);
+
+        $attributes = [
+            'name' => (string) ($metaRow['name'] ?? $campaign->name ?? 'Unnamed Campaign'),
+            'status' => (string) ($metaRow['status'] ?? $campaign->status ?? 'UNKNOWN'),
+        ];
+
+        if ($adAccountId !== null) {
+            $attributes['ad_account_id'] = $adAccountId;
+        }
+
+        $campaign->fill($attributes);
+
+        if (! $campaign->exists && ! empty($metaRow['objective'])) {
+            $campaign->objective = (string) $metaRow['objective'];
+        }
+
+        $campaign->save();
+
+        return $campaign;
+    }
    /*
     |--------------------------------------------------------------------------
     | Metrics Aggregation

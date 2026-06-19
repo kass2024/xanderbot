@@ -48,13 +48,16 @@
     name="objective"
     class="w-full rounded-xl border border-slate-200 px-4 py-3 shadow-sm focus:border-xander-navy focus:ring-2 focus:ring-xander-navy/20"
 >
-@php $objective = old('objective', $campaign->objective); @endphp
+@php $objective = old('objective', $normalizedObjective ?? $campaign->objective); @endphp
 <option value="OUTCOME_TRAFFIC" @selected($objective === 'OUTCOME_TRAFFIC')>Website traffic</option>
 <option value="OUTCOME_LEADS" @selected($objective === 'OUTCOME_LEADS')>Lead generation</option>
 <option value="OUTCOME_ENGAGEMENT" @selected($objective === 'OUTCOME_ENGAGEMENT')>Engagement</option>
 <option value="OUTCOME_AWARENESS" @selected($objective === 'OUTCOME_AWARENESS')>Awareness</option>
 <option value="OUTCOME_SALES" @selected($objective === 'OUTCOME_SALES')>Sales</option>
 </select>
+<p class="text-xs text-slate-500">
+Saved in xanderbot immediately. Meta keeps the original objective on linked campaigns; sync will not overwrite your local choice.
+</p>
 </div>
 
 @php

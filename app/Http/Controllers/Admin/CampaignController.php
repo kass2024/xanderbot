@@ -272,8 +272,21 @@ class CampaignController extends Controller
 
     public function edit(Campaign $campaign)
     {
+        $legacyObjectiveMap = [
+            'TRAFFIC' => 'OUTCOME_TRAFFIC',
+            'LEADS' => 'OUTCOME_LEADS',
+            'ENGAGEMENT' => 'OUTCOME_ENGAGEMENT',
+            'AWARENESS' => 'OUTCOME_AWARENESS',
+            'SALES' => 'OUTCOME_SALES',
+            'APP_PROMOTION' => 'OUTCOME_APP_PROMOTION',
+        ];
+
+        $normalizedObjective = $legacyObjectiveMap[strtoupper((string) $campaign->objective)]
+            ?? strtoupper((string) $campaign->objective);
+
         return view('admin.campaigns.edit', [
             'campaign' => $campaign,
+            'normalizedObjective' => $normalizedObjective,
         ]);
     }
 
@@ -309,18 +322,27 @@ class CampaignController extends Controller
                 }
             }
 
+            $previousObjective = $campaign->objective;
+
             $campaign->update($update);
+
+            $metaWarning = null;
 
             if ($campaign->meta_id) {
                 $this->meta->updateCampaign($campaign->meta_id, [
                     'name' => $data['name'],
                     'status' => $status,
                 ]);
+
+                if ($previousObjective !== $data['objective']) {
+                    $metaWarning = 'Objective saved locally. Meta does not allow changing objective on an existing campaign — create a new campaign on Meta if you need a different objective there.';
+                }
             }
 
             return redirect()
                 ->route('admin.campaigns.index')
-                ->with('success', 'Campaign updated successfully.');
+                ->with('success', 'Campaign updated successfully.')
+                ->with('meta_warning', $metaWarning);
 
         } catch (Throwable $e) {
             Log::error('CAMPAIGN_UPDATE_FAILED', [

@@ -54,14 +54,7 @@ class SyncMetaCampaigns extends Command
                     continue;
                 }
 
-                $record = Campaign::updateOrCreate(
-                    ['meta_id' => $campaign['id']],
-                    [
-                        'name' => $campaign['name'] ?? 'Unnamed Campaign',
-                        'status' => $campaign['status'] ?? 'UNKNOWN',
-                        'objective' => $campaign['objective'] ?? null
-                    ]
-                );
+                $record = Campaign::upsertFromMeta($campaign);
 
                 $count++;
 

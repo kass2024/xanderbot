@@ -75,15 +75,7 @@ class SyncMetaAds extends Command
             $campaigns = $this->safeMetaCall(fn () => $this->meta->getCampaigns($accountId));
 
             foreach ($campaigns['data'] ?? [] as $c) {
-                Campaign::updateOrCreate(
-                    ['meta_id' => $c['id']],
-                    [
-                        'ad_account_id' => $account->id,
-                        'name' => $c['name'],
-                        'status' => $c['status'],
-                        'objective' => $c['objective'] ?? null,
-                    ]
-                );
+                Campaign::upsertFromMeta($c, $account->id);
             }
 
             $campaignMap = Campaign::pluck('id', 'meta_id');
