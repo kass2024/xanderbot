@@ -10,6 +10,7 @@ use App\Services\Chatbot\ChatbotProcessor;
 use App\Services\Chatbot\MessageDispatcher;
 use App\Services\Chatbot\SpeechService;
 use App\Services\WhatsApp\PlatformResolver;
+use App\Services\WhatsApp\PrescreeningBridge;
 use App\Services\WhatsAppAudioConverter;
 use App\Support\WhatsAppTracker;
 use Illuminate\Http\Request;
@@ -26,7 +27,8 @@ class MetaWebhookController extends Controller
     public function __construct(
         protected ChatbotProcessor $processor,
         protected MessageDispatcher $dispatcher,
-        protected PlatformResolver $platformResolver
+        protected PlatformResolver $platformResolver,
+        protected PrescreeningBridge $prescreeningBridge
     ) {}
 
     /*
@@ -206,6 +208,28 @@ class MetaWebhookController extends Controller
                 'message_id' => $messageId,
                 'text_preview' => mb_substr($this->extractInboundPayload($incoming)['text'] ?? '', 0, 120),
             ]);
+
+            if ($this->prescreeningBridge->isEnabled()) {
+                $tryPrescreening = $this->prescreeningBridge->shouldTryPrescreening($incoming)
+                    || $this->prescreeningBridge->hasActiveSession($from);
+
+                if ($tryPrescreening) {
+                    $bridgeResult = $this->prescreeningBridge->forwardMessage($from, $incoming);
+                    if (is_array($bridgeResult) && ! empty($bridgeResult['handled'])) {
+                        WhatsAppTracker::whatsapp('prescreening_bridge_handled', [
+                            'from' => $from,
+                            'message_id' => $messageId,
+                            'duplicate' => $bridgeResult['duplicate'] ?? false,
+                        ]);
+                        Log::channel('webhook')->info('prescreening.bridge.handled', [
+                            'from_tail' => strlen($from) >= 4 ? substr($from, -4) : null,
+                            'message_id' => $messageId,
+                        ]);
+
+                        continue;
+                    }
+                }
+            }
 
             WhatsAppTracker::whatsapp('webhook_routed_chatbot', ['from' => $from, 'message_id' => $messageId]);
 
@@ -437,6 +461,8 @@ class MetaWebhookController extends Controller
             } else {
                 WhatsAppTracker::whatsapp('delivery_status', $logCtx);
             }
+
+            $this->prescreeningBridge->forwardDeliveryStatus($status);
         }
     }
 

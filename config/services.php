@@ -112,6 +112,20 @@ return [
 
         'hash_algo' => 'sha256',
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Pre-screening on cPanel (xanderglobalscholars.com)
+    | Meta webhook stays here; messages + delivery statuses forward to cPanel.
+    |--------------------------------------------------------------------------
+    */
+    'prescreening' => [
+        'cpanel_url' => env(
+            'XANDER_PRESCREENING_URL',
+            'https://xanderglobalscholars.com/api/prescreening-inbound.php'
+        ),
+        'forward_secret' => env('PRESCREENING_FORWARD_SECRET'),
+    ],
     
 'openai' => [
     'key'   => env('OPENAI_API_KEY'),
