@@ -42,6 +42,8 @@ class Campaign extends Model
 
     protected $fillable = [
         'ad_account_id',
+        'client_id',
+        'meta_page_id',
 
         // Meta API ID
         'meta_id',
@@ -65,7 +67,14 @@ class Campaign extends Model
 
         // schedule
         'started_at',
-        'ended_at'
+        'ended_at',
+
+        // marketing wizard
+        'marketing_channel',
+        'wizard_state',
+        'meta_effective_status',
+        'meta_review_feedback',
+        'platform_meta_connection_id',
     ];
 
 
@@ -85,7 +94,8 @@ class Campaign extends Model
         'leads'        => 'integer',
 
         'started_at'   => 'datetime',
-        'ended_at'     => 'datetime'
+        'ended_at'     => 'datetime',
+        'wizard_state' => 'array',
     ];
 
 
@@ -107,7 +117,7 @@ class Campaign extends Model
     /**
      * Campaign has many AdSets
      */
-    public function adSets(): HasMany
+    public function adsets(): HasMany
     {
         return $this->hasMany(AdSet::class);
     }
@@ -120,9 +130,7 @@ class Campaign extends Model
     {
         return $this->hasManyThrough(
             Ad::class,
-            AdSet::class,
-            'campaign_id',
-            'adset_id'
+            AdSet::class
         );
     }
 
@@ -256,35 +264,6 @@ class Campaign extends Model
         $this->update([
             'status' => self::STATUS_COMPLETED
         ]);
-    }
-
-    /**
-     * Sync campaign fields from Meta without overwriting a locally edited objective.
-     */
-    public static function upsertFromMeta(array $metaRow, ?int $adAccountId = null): self
-    {
-        $campaign = static::firstOrNew([
-            'meta_id' => (string) ($metaRow['id'] ?? ''),
-        ]);
-
-        $attributes = [
-            'name' => (string) ($metaRow['name'] ?? $campaign->name ?? 'Unnamed Campaign'),
-            'status' => (string) ($metaRow['status'] ?? $campaign->status ?? 'UNKNOWN'),
-        ];
-
-        if ($adAccountId !== null) {
-            $attributes['ad_account_id'] = $adAccountId;
-        }
-
-        $campaign->fill($attributes);
-
-        if (! $campaign->exists && ! empty($metaRow['objective'])) {
-            $campaign->objective = (string) $metaRow['objective'];
-        }
-
-        $campaign->save();
-
-        return $campaign;
     }
    /*
     |--------------------------------------------------------------------------

@@ -59,6 +59,7 @@ class AdSet extends Model
 
         /* Optimization */
         'optimization_goal',
+        'destination_type',
         'billing_event',
 
         /* Targeting */
@@ -110,7 +111,7 @@ class AdSet extends Model
 
     public function ads(): HasMany
     {
-        return $this->hasMany(Ad::class, 'adset_id');
+        return $this->hasMany(Ad::class);
     }
 
 
@@ -239,6 +240,11 @@ public function getBudgetFormattedAttribute(): string
         return $this->targeting['geo_locations']['countries'] ?? [];
     }
 
+    public function getCities(): array
+    {
+        return $this->targeting['geo_locations']['cities'] ?? [];
+    }
+
     public function getAgeRange(): array
     {
         return [
@@ -248,8 +254,6 @@ public function getBudgetFormattedAttribute(): string
     }
 
     /**
-     * Publisher platforms from Meta targeting (facebook, instagram, etc.).
-     *
      * @return list<string>
      */
     public function publisherPlatforms(): array
@@ -274,8 +278,6 @@ public function getBudgetFormattedAttribute(): string
     }
 
     /**
-     * Human labels for configured placements (not delivery proof — see Meta insights).
-     *
      * @return list<string>
      */
     public function placementTargetLabels(): array

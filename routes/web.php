@@ -36,6 +36,8 @@ use App\Http\Controllers\Admin\{
     AdController,
     AnalyticsController,
     CreativeController,
+    MarketingWizardController,
+    MetaApiLogController,
     UserController
 };
 
@@ -47,6 +49,9 @@ use App\Http\Controllers\Admin\{
 */
 
 Route::view('/', 'welcome')->name('home');
+
+Route::get('/register/facebook-pages', \App\Http\Controllers\Public\RegisterPagesController::class)
+    ->name('register.pages');
 
 
 /*
@@ -84,7 +89,7 @@ Route::middleware(['auth','verified'])
     }
 
     if ($user->isClient()) {
-        return redirect()->route('client.dashboard');
+        return redirect()->route('admin.campaigns.index');
     }
 
     abort(403);
@@ -217,10 +222,12 @@ Route::middleware(['auth','verified','role:client'])
 |--------------------------------------------------------------------------
 */
 
-Route::middleware(['auth','verified','role:admin'])
+Route::middleware(['auth','verified','role:admin,client'])
     ->prefix('admin')
     ->as('admin.')
     ->group(function () {
+
+        Route::middleware('role:admin')->group(function () {
 
         /*
         |--------------------------------------------------------------------------
@@ -307,6 +314,8 @@ Route::middleware(['auth','verified','role:admin'])
                 Route::delete('{conversation}/delete', 'deleteConversation')->name('delete');
             });
 
+        }); // end admin-only management routes
+
         /*
         |--------------------------------------------------------------------------
         | META ADS SYSTEM
@@ -318,6 +327,15 @@ Route::middleware(['auth','verified','role:admin'])
 
         // Campaigns - Full resource with all methods
         Route::resource('campaigns', AdminCampaignController::class)->names('campaigns');
+
+        Route::prefix('marketing')->name('marketing.')->group(function () {
+            Route::get('wizard', [MarketingWizardController::class, 'index'])->name('wizard');
+            Route::post('wizard/step', [MarketingWizardController::class, 'saveStep'])->name('wizard.step');
+            Route::post('wizard/preflight', [MarketingWizardController::class, 'preflight'])->name('wizard.preflight');
+            Route::post('wizard/publish', [MarketingWizardController::class, 'publish'])->name('wizard.publish');
+            Route::post('wizard/draft', [MarketingWizardController::class, 'saveDraft'])->name('wizard.draft');
+            Route::get('meta-logs', [MetaApiLogController::class, 'index'])->name('logs');
+        });
 
         // Campaign-specific actions
         Route::prefix('campaigns')->name('campaigns.')->group(function () {
@@ -382,45 +400,37 @@ Route::middleware(['auth','verified','role:admin'])
         |--------------------------------------------------------------------------
         */
 
-        // Live + actions before resource {ad} wildcard (so /ads/live is not ads/{ad})
-        Route::prefix('ads')->name('ads.')->group(function () {
+        // Additional Ad routes (live + actions before resource {ad} wildcard)
+Route::prefix('ads')->name('ads.')->group(function () {
 
-            Route::get('live', [AdController::class, 'live'])
-                ->name('live');
+    Route::get('live', [AdController::class, 'live'])
+        ->name('live');
 
-            Route::post('bulk-status-update', [AdController::class, 'bulkStatusUpdate'])
-                ->name('bulk-status-update');
+    Route::post('bulk-status-update', [AdController::class, 'bulkStatusUpdate'])
+        ->name('bulk-status-update');
 
-            Route::patch('{ad}/activate', [AdController::class, 'activate'])
-                ->name('activate');
+    Route::patch('{ad}/activate', [AdController::class, 'activate'])
+        ->name('activate');
 
-            Route::patch('{ad}/pause', [AdController::class, 'pause'])
-                ->name('pause');
+    Route::patch('{ad}/pause', [AdController::class, 'pause'])
+        ->name('pause');
 
-            Route::post('{ad}/duplicate', [AdController::class, 'duplicate'])
-                ->name('duplicate');
+    Route::post('{ad}/duplicate', [AdController::class, 'duplicate'])
+        ->name('duplicate');
 
-            Route::post('{ad}/sync', [AdController::class, 'sync'])
-                ->name('sync');
+    Route::post('{ad}/sync', [AdController::class, 'sync'])
+        ->name('sync');
+Route::get('{ad}/preview', [AdController::class,'preview'])
+    ->name('preview');
+    Route::post('{ad}/publish', [AdController::class, 'publish'])
+        ->name('publish');
 
-            Route::get('{ad}/preview', [AdController::class, 'preview'])
-                ->name('preview');
+    Route::post('enable-instagram-all', [AdController::class, 'enableInstagramAll'])
+        ->name('enable-instagram-all');
 
-            Route::post('{ad}/publish', [AdController::class, 'publish'])
-                ->name('publish');
-
-            Route::post('resync-metrics', [AdController::class, 'resyncMetricsAll'])
-                ->name('resync-metrics');
-
-            Route::post('ensure-brand-pages', [AdController::class, 'ensureBrandPagesAll'])
-                ->name('ensure-brand-pages');
-
-            Route::post('enable-instagram-all', [AdController::class, 'enableInstagramAll'])
-                ->name('enable-instagram-all');
-
-            Route::post('{ad}/enable-instagram', [AdController::class, 'enableInstagram'])
-                ->name('enable-instagram');
-        });
+    Route::post('{ad}/enable-instagram', [AdController::class, 'enableInstagram'])
+        ->name('enable-instagram');
+});
 
         Route::resource('ads', AdController::class)->names('ads');
 
@@ -534,6 +544,8 @@ Route::prefix('creatives')->name('creatives.')->group(function () {
         |--------------------------------------------------------------------------
         */
 
+        Route::middleware('role:admin')->group(function () {
+
         Route::prefix('system')->name('system.')->group(function () {
             
             Route::get('/', fn() => view('admin.system.index'))->name('index');
@@ -579,6 +591,8 @@ Route::prefix('creatives')->name('creatives.')->group(function () {
                 Route::get('/billing', [\App\Http\Controllers\Admin\BillingController::class, 'index'])
     ->name('billing');
         });
+
+        }); // end admin-only system + settings
 
     });
 

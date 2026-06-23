@@ -8,6 +8,9 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Storage;
+use App\Services\MetaAdsService;
+use App\Support\TenantScope;
+use Throwable;
 
 class Creative extends Model
 {
@@ -45,6 +48,8 @@ class Creative extends Model
     const CTA_CONTACT_US  = 'CONTACT_US';
     const CTA_DOWNLOAD    = 'DOWNLOAD';
     const CTA_GET_OFFER   = 'GET_OFFER';
+    const CTA_WHATSAPP_MESSAGE = 'WHATSAPP_MESSAGE';
+    const CTA_SEND_MESSAGE = 'SEND_MESSAGE';
 
 
     /*
@@ -77,6 +82,13 @@ class Creative extends Model
 
         // destination
         'destination_url',
+        'description',
+        'creative_format',
+        'page_id',
+        'instagram_user_id',
+        'whatsapp_phone_number',
+        'whatsapp_prefill_message',
+        'whatsapp_fallback_url',
 
         // raw Meta payload
         'json_payload',
@@ -145,7 +157,7 @@ class Creative extends Model
 
     public function adset(): BelongsTo
     {
-        return $this->belongsTo(AdSet::class, 'adset_id');
+        return $this->belongsTo(AdSet::class);
     }
 
     public function ads(): HasMany
@@ -219,18 +231,116 @@ class Creative extends Model
 
     public function getImageUrlAttribute($value): ?string
     {
+        $localUrl = self::resolvePublicImageUrl($value);
+
+        if ($localUrl && self::localImageExists($value)) {
+            return $localUrl;
+        }
+
+        $metaUrl = data_get($this->json_payload, 'meta_image_url');
+
+        if ($metaUrl) {
+            return $metaUrl;
+        }
+
+        return $localUrl;
+    }
+
+    public static function normalizeImageDiskPath(?string $value): ?string
+    {
         if (!$value) {
             return null;
         }
 
-        if (
-            str_starts_with($value, 'http') ||
-            str_starts_with($value, '/storage')
-        ) {
+        if (str_starts_with($value, 'http://') || str_starts_with($value, 'https://')) {
+            if (preg_match('#/storage/(.+)$#', $value, $matches)) {
+                return $matches[1];
+            }
+
+            return null;
+        }
+
+        if (str_starts_with($value, '/storage/')) {
+            return ltrim(substr($value, strlen('/storage/')), '/');
+        }
+
+        return $value;
+    }
+
+    public static function resolvePublicImageUrl(?string $value): ?string
+    {
+        if (!$value) {
+            return null;
+        }
+
+        if (str_starts_with($value, 'http://') || str_starts_with($value, 'https://')) {
+            if (preg_match('#^https?://(?:127\.0\.0\.1|localhost)(?::\d+)?(/storage/.+)$#', $value, $matches)) {
+                return url($matches[1]);
+            }
+
             return $value;
         }
 
-        return Storage::url($value);
+        if (str_starts_with($value, '/storage/')) {
+            return url($value);
+        }
+
+        return Storage::disk('public')->url($value);
+    }
+
+    public static function localImageExists(?string $value): bool
+    {
+        $path = self::normalizeImageDiskPath($value);
+
+        return $path !== null && Storage::disk('public')->exists($path);
+    }
+
+    public static function hydrateMetaImageUrls(iterable $creatives, MetaAdsService $meta): void
+    {
+        $needsLookup = collect($creatives)->filter(function (self $creative) {
+            if (data_get($creative->json_payload, 'meta_image_url')) {
+                return false;
+            }
+
+            if (!$creative->image_hash) {
+                return false;
+            }
+
+            return !self::localImageExists($creative->getRawOriginal('image_url'));
+        });
+
+        if ($needsLookup->isEmpty()) {
+            return;
+        }
+
+        $accountId = TenantScope::adAccountMetaId();
+
+        if (! $accountId) {
+            return;
+        }
+
+        try {
+            $images = $meta->getAdImagesByHashes(
+                $accountId,
+                $needsLookup->pluck('image_hash')->unique()->values()->all()
+            );
+        } catch (Throwable) {
+            return;
+        }
+
+        foreach ($needsLookup as $creative) {
+            $url = $images[$creative->image_hash] ?? null;
+
+            if (!$url) {
+                continue;
+            }
+
+            $payload = $creative->json_payload ?? [];
+            $payload['meta_image_url'] = $url;
+
+            $creative->json_payload = $payload;
+            $creative->saveQuietly();
+        }
     }
 
 
@@ -356,7 +466,9 @@ class Creative extends Model
             self::CTA_SIGN_UP    => 'Sign Up',
             self::CTA_CONTACT_US => 'Contact Us',
             self::CTA_DOWNLOAD   => 'Download',
-            self::CTA_GET_OFFER  => 'Get Offer'
+            self::CTA_GET_OFFER  => 'Get Offer',
+            self::CTA_WHATSAPP_MESSAGE => 'WhatsApp Message',
+            self::CTA_SEND_MESSAGE => 'Send Message',
 
         ];
     }

@@ -6,8 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Creative;
 use App\Models\AdSet;
 use App\Models\Campaign;
-use App\Models\AdAccount;
 use App\Services\MetaAdsService;
+use App\Services\Meta\ClickToWhatsAppCreativeBuilder;
+use App\Support\TenantScope;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -20,10 +21,12 @@ use Exception;
 class CreativeController extends Controller
 {
     protected MetaAdsService $meta;
+    protected ClickToWhatsAppCreativeBuilder $whatsAppBuilder;
 
-    public function __construct(MetaAdsService $meta)
+    public function __construct(MetaAdsService $meta, ClickToWhatsAppCreativeBuilder $whatsAppBuilder)
     {
         $this->meta = $meta;
+        $this->whatsAppBuilder = $whatsAppBuilder;
     }
 
     /*
@@ -34,28 +37,26 @@ class CreativeController extends Controller
 
     public function index()
     {
-        $creatives = Creative::with(['campaign','adset'])
+        $creatives = TenantScope::creatives(
+            Creative::with(['campaign','adset'])
+        )
             ->latest()
             ->paginate(20);
+
+        try {
+            Creative::hydrateMetaImageUrls($creatives->getCollection(), $this->meta);
+        } catch (Throwable) {
+            // Thumbnails fall back to local storage URLs when Meta lookup fails.
+        }
 
         return view('admin.creatives.index', [
             'creatives' => $creatives,
             'creativeStats' => [
-                'total' => Creative::count(),
-                // Match creatives/index.blade.php "Approved" badge: APPROVED or ACTIVE delivery, and not disapproved.
-                'approved' => Creative::query()
-                    ->where(function ($q) {
-                        $q->where('review_status', 'APPROVED')
-                            ->orWhere('effective_status', 'ACTIVE');
-                    })
-                    ->where(function ($q) {
-                        $q->whereNull('review_status')
-                            ->orWhere('review_status', '<>', 'DISAPPROVED');
-                    })
-                    ->count(),
-                'pending' => Creative::where('review_status', 'PENDING_REVIEW')->count(),
-                'rejected' => Creative::where('review_status', 'DISAPPROVED')->count(),
-                'active' => Creative::where('effective_status', 'ACTIVE')->count(),
+                'total' => TenantScope::creatives(Creative::query())->count(),
+                'approved' => TenantScope::creatives(Creative::query())->where('review_status', 'APPROVED')->count(),
+                'pending' => TenantScope::creatives(Creative::query())->where('review_status', 'PENDING_REVIEW')->count(),
+                'rejected' => TenantScope::creatives(Creative::query())->where('review_status', 'DISAPPROVED')->count(),
+                'active' => TenantScope::creatives(Creative::query())->where('effective_status', 'ACTIVE')->count(),
             ],
         ]);
     }
@@ -68,20 +69,17 @@ class CreativeController extends Controller
 
     public function create()
     {
-        $campaigns = Campaign::latest()->get();
+        $campaigns = TenantScope::campaigns(Campaign::query())->latest()->get();
 
-        $adsets = AdSet::latest()->get();
+        $adsets = TenantScope::adSets(AdSet::query())->latest()->get();
 
-        $pages = $this->meta->getPages();
+        $pages = TenantScope::filterPages($this->meta->getPages());
 
-        return view('admin.creatives.create', [
-            'campaigns' => $campaigns,
-            'adsets' => $adsets,
-            'pages' => $pages,
-            'selectedCampaign' => request('campaign'),
-            'selectedAdset' => request('adset'),
-            'selectedPage' => request('page'),
-        ]);
+        return view('admin.creatives.create', compact(
+            'campaigns',
+            'adsets',
+            'pages'
+        ));
     }
 
     /*
@@ -92,27 +90,7 @@ class CreativeController extends Controller
 
     public function store(Request $request)
     {
-        Log::info('CREATIVE_STORE_REQUEST', $request->except(['image', '_token']));
-
-        if (! $request->hasFile('image')) {
-            return back()
-                ->withInput()
-                ->withErrors(['image' => 'Please choose an image file (JPG or PNG).']);
-        }
-
-        $uploadedFile = $request->file('image');
-
-        if (! $uploadedFile->isValid()) {
-            return back()
-                ->withInput()
-                ->withErrors(['image' => $this->uploadedImageErrorMessage($uploadedFile)]);
-        }
-
-        Log::info('CREATIVE_STORE_IMAGE', [
-            'size_kb' => round($uploadedFile->getSize() / 1024, 1),
-            'mime' => $uploadedFile->getMimeType(),
-            'name' => $uploadedFile->getClientOriginalName(),
-        ]);
+        Log::info('CREATIVE_STORE_REQUEST', $request->all());
 
         $data = $request->validate([
 
@@ -128,38 +106,36 @@ class CreativeController extends Controller
 
             'body' => 'nullable|string',
 
-            'destination_url' => 'nullable|string|max:2048',
+            'destination_url' => 'nullable|url',
 
             'call_to_action' => 'nullable|string|max:50',
 
-            'image' => ['required', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'image' => 'required|image|max:4096',
 
             'sync_meta' => 'nullable|boolean',
 
-            'status' => 'nullable|string',
+            'status' => 'nullable|string'
 
         ]);
-
-        if ($request->boolean('sync_meta')) {
-            $request->validate([
-                'destination_url' => ['required', 'string', 'max:2048'],
-            ]);
-        }
 
 
         DB::beginTransaction();
 
         try {
 
-            $campaign = Campaign::with('adAccount')->findOrFail($data['campaign_id']);
+            $campaign = Campaign::findOrFail($data['campaign_id']);
+
+            TenantScope::assertCampaign($campaign);
 
             $adset = AdSet::findOrFail($data['adset_id']);
 
-            $account = $campaign->adAccount ?? AdAccount::whereNotNull('meta_id')->first();
+            TenantScope::assertAdSet($adset);
 
-            if (! $account || ! $account->meta_id) {
-                throw new Exception('Meta Ad Account not connected for this campaign.');
+            if ($tenantPageId = TenantScope::pageId()) {
+                $data['page_id'] = $tenantPageId;
             }
+
+            $account = TenantScope::requireAdAccount();
 
             $accountId = $account->meta_id;
 
@@ -181,9 +157,6 @@ class CreativeController extends Controller
 
             $imageFullPath = storage_path('app/public/'.$imagePath);
 
-            if (! is_file($imageFullPath)) {
-                throw new Exception('Stored image missing at '.$imageFullPath.'. Run php artisan storage:link on the server.');
-            }
 
             /*
             |--------------------------------------------------------------------------
@@ -192,6 +165,7 @@ class CreativeController extends Controller
             */
 
             $imageHash = null;
+            $metaImageUrl = null;
 
             if ($request->boolean('sync_meta')) {
 
@@ -202,43 +176,68 @@ class CreativeController extends Controller
 
                 Log::info('META_IMAGE_UPLOAD', $imageResponse);
 
-                $imageHash = $this->meta->extractImageHashFromUploadResponse($imageResponse);
-
-                if (! $imageHash) {
-                    throw new Exception('Meta image upload failed: no image hash returned.');
+                if (!isset($imageResponse['images'])) {
+                    throw new Exception('Meta image upload failed.');
                 }
+
+                $image = current($imageResponse['images']);
+
+                $imageHash = $image['hash'] ?? null;
+
+                if (!$imageHash) {
+                    throw new Exception('Meta image hash missing.');
+                }
+
+                $metaImageUrl = $image['url']
+                    ?? $image['url_256']
+                    ?? $image['url_128']
+                    ?? null;
             }
 
 
             /*
             |--------------------------------------------------------------------------
-            | BUILD LINK DATA
-            |--------------------------------------------------------------------------
-            | Meta rejects creatives used with LINK_CLICKS / LANDING_PAGE_VIEWS
-            | ad sets when link is missing, localhost, or not a real website (1815520).
+            | BUILD LINK DATA / WHATSAPP CREATIVE
             |--------------------------------------------------------------------------
             */
 
-            $landingUrl = $data['destination_url'] ?? null;
+            $isWhatsApp = ($data['creative_format'] ?? '') === 'click_to_whatsapp'
+                || in_array(strtoupper((string) ($data['call_to_action'] ?? '')), ['WHATSAPP_MESSAGE', 'SEND_MESSAGE'], true);
 
-            $normalizedLanding = null;
+            $accountMetaId = $campaign->adAccount?->meta_id ?? TenantScope::adAccountMetaId();
+            $instagramUserId = $this->meta->resolveInstagramUserId($data['page_id'], $accountMetaId);
 
-            if ($request->boolean('sync_meta')) {
-                if (empty($landingUrl)) {
-                    throw new Exception('Destination URL is required when syncing a creative to Meta.');
-                }
-                $normalizedLanding = $this->meta->normalizeLandingUrlForMeta($landingUrl);
-            }
+            if ($isWhatsApp) {
+                $whatsappPhone = $data['whatsapp_phone_number']
+                    ?? \App\Models\PlatformMetaConnection::query()->latest()->value('whatsapp_phone_number');
 
+                $creativeInput = [
+                    'page_id' => $data['page_id'],
+                    'instagram_user_id' => $instagramUserId ?? null,
+                    'headline' => $data['headline'] ?? $data['name'],
+                    'primary_text' => $data['body'] ?? '',
+                    'description' => $data['description'] ?? '',
+                    'image_hash' => $imageHash,
+                    'whatsapp_phone_number' => $whatsappPhone,
+                    'whatsapp_prefill_message' => $data['whatsapp_prefill_message'] ?? '',
+                ];
+
+                $payload = $this->whatsAppBuilder->buildCreativePayload($data['name'], $creativeInput);
+                $data['call_to_action'] = $payload['object_story_spec']['link_data']['call_to_action']['type'] ?? 'WHATSAPP_MESSAGE';
+                $data['destination_url'] = $this->whatsAppBuilder->buildWhatsAppLink(
+                    (string) $whatsappPhone,
+                    (string) ($data['whatsapp_prefill_message'] ?? '')
+                );
+            } else {
             $linkData = [
 
-                'link' => $normalizedLanding ?? ($landingUrl ?? config('app.url')),
+                'link' => $data['destination_url'] ?? config('app.url'),
 
                 'message' => $data['body'] ?? '',
 
                 'name' => $data['headline'] ?? $data['name'],
 
-                'image_hash' => $imageHash,
+                'image_hash' => $imageHash
 
             ];
 
@@ -250,10 +249,14 @@ class CreativeController extends Controller
                     'type' => $data['call_to_action'],
 
                     'value' => [
-                        'link' => $normalizedLanding ?? ($landingUrl ?? $linkData['link']),
-                    ],
+                        'link' => $data['destination_url']
+                    ]
 
                 ];
+            }
+
+            if (empty($linkData['image_hash'])) {
+                unset($linkData['image_hash']);
             }
 
 
@@ -271,16 +274,20 @@ class CreativeController extends Controller
 
                     'page_id' => $data['page_id'],
 
-                    'link_data' => $linkData,
+                    'link_data' => $linkData
 
-                ],
+                ]
 
             ];
+            }
 
-            $instagramUserId = $this->meta->resolveInstagramUserId($data['page_id']);
-            if ($instagramUserId !== null && $instagramUserId !== '') {
+            if ($metaImageUrl) {
+                $payload['meta_image_url'] = $metaImageUrl;
+            }
+
+            if ($instagramUserId !== null && $instagramUserId !== '' && empty($payload['object_story_spec']['instagram_user_id'])) {
                 $payload['object_story_spec']['instagram_user_id'] = $instagramUserId;
-            } elseif ($request->boolean('sync_meta')) {
+            } elseif ($request->boolean('sync_meta') && ! $isWhatsApp) {
                 throw new Exception(
                     'Instagram is not available for this Page. Link Page ↔ Instagram in Meta Business Suite, '
                     .'or set META_INSTAGRAM_USER_ID in .env, then try again.'
@@ -337,10 +344,25 @@ class CreativeController extends Controller
 
                 'body' => $data['body'] ?? null,
 
+                'description' => $data['description'] ?? null,
+
                 'destination_url' => $data['destination_url'] ?? null,
 
                 'call_to_action' => $data['call_to_action'] ?? null,
-'image_url' => Storage::url($imagePath),
+
+                'creative_format' => $isWhatsApp ? 'click_to_whatsapp' : 'link',
+
+                'page_id' => $data['page_id'],
+
+                'instagram_user_id' => $instagramUserId,
+
+                'whatsapp_phone_number' => $isWhatsApp ? ($data['whatsapp_phone_number'] ?? null) : null,
+
+                'whatsapp_prefill_message' => $isWhatsApp ? ($data['whatsapp_prefill_message'] ?? null) : null,
+
+                'whatsapp_fallback_url' => $isWhatsApp ? ($data['destination_url'] ?? null) : null,
+
+                'image_url' => $imagePath,
 
                 'image_hash' => $imageHash,
 
@@ -366,12 +388,8 @@ class CreativeController extends Controller
 
 
             return redirect()
-                ->route('admin.ads.create', [
-                    'adset' => $creative->adset_id,
-                    'creative' => $creative->id,
-                    'name' => $creative->name,
-                ])
-                ->with('success', 'Creative created. Finish by creating your ad.');
+                ->route('admin.creatives.index')
+                ->with('success', 'Creative created and synced.');
 
         } catch (Throwable $e) {
 
@@ -383,42 +401,12 @@ class CreativeController extends Controller
 
             ]);
 
-            $message = $e->getMessage();
-            $field = $this->creativeStoreErrorField($message);
-
             return back()
                 ->withInput()
                 ->withErrors([
-                    $field => $message,
+                    'meta' => $e->getMessage()
                 ]);
         }
-    }
-
-    private function uploadedImageErrorMessage(\Illuminate\Http\UploadedFile $file): string
-    {
-        return match ($file->getError()) {
-            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE =>
-                'Image is too large for PHP on this server (upload_max_filesize / post_max_size). Use an image under 5MB or set upload_max_filesize=5M in php.ini.',
-            UPLOAD_ERR_PARTIAL => 'The image upload was interrupted. Please try again.',
-            UPLOAD_ERR_NO_FILE => 'No image file was received by the server.',
-            default => $file->getErrorMessage() ?: 'The image failed to upload before it reached the app.',
-        };
-    }
-
-    private function creativeStoreErrorField(string $message): string
-    {
-        $lower = strtolower($message);
-
-        if (
-            str_contains($lower, 'image')
-            || str_contains($lower, 'upload')
-            || str_contains($lower, 'hash')
-            || str_contains($lower, 'resize')
-        ) {
-            return 'image';
-        }
-
-        return 'meta';
     }
 
 
@@ -454,7 +442,7 @@ class CreativeController extends Controller
 
             'call_to_action' => 'nullable|string|max:50',
 
-            'image' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'image' => 'nullable|image|max:4096'
 
         ]);
 
@@ -462,12 +450,16 @@ class CreativeController extends Controller
 
             if ($request->hasFile('image')) {
 
-                if ($creative->image_url) {
-                    Storage::disk('public')->delete($creative->image_url);
+                $diskPath = Creative::normalizeImageDiskPath(
+                    $creative->getRawOriginal('image_url')
+                );
+
+                if ($diskPath) {
+                    Storage::disk('public')->delete($diskPath);
                 }
 
                 $creative->image_url = $request->file('image')
-                    ->store('creatives','public');
+                    ->store('creatives', 'public');
             }
 
             $creative->update($data);
@@ -501,8 +493,12 @@ class CreativeController extends Controller
     {
         try {
 
-            if ($creative->image_url) {
-                Storage::disk('public')->delete($creative->image_url);
+            $diskPath = Creative::normalizeImageDiskPath(
+                $creative->getRawOriginal('image_url')
+            );
+
+            if ($diskPath) {
+                Storage::disk('public')->delete($diskPath);
             }
 
             $creative->delete();
@@ -594,9 +590,13 @@ public function sync($id)
 
         if (!$reviewStatus) {
 
-            $accountId =
-                config('services.meta.ad_account_id')
-                ?? env('META_AD_ACCOUNT_ID');
+            $accountId = TenantScope::adAccountMetaId();
+
+            if (! $accountId) {
+                return back()->withErrors([
+                    'meta' => 'Platform Meta ad account is not configured.',
+                ]);
+            }
 
             $ads = $this->meta->getAds($accountId);
 
@@ -669,6 +669,12 @@ public function sync($id)
             'review_feedback' => $reviewFeedback,
             'last_synced_at' => now()
         ]);
+
+        try {
+            Creative::hydrateMetaImageUrls(collect([$creative->fresh()]), $this->meta);
+        } catch (Throwable) {
+            // Image preview falls back to local storage when Meta lookup fails.
+        }
 
 
         return back()->with('success','Creative synced successfully.');

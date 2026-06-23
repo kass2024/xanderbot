@@ -2,37 +2,50 @@
 
 namespace App\Services;
 
-use Exception;
+use App\Services\Meta\MetaApiLogger;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Exception;
+use Throwable;
 
 class MetaAdsService
 {
     protected string $baseUrl;
-    protected string $accessToken;
-    protected string $defaultAccount;
+    protected ?string $accessToken;
+    protected ?string $defaultAccount;
     protected bool $debug;
+    protected MetaApiLogger $apiLogger;
 
-    public function __construct()
+    public function __construct(?MetaApiLogger $apiLogger = null)
     {
-        $version = config('services.meta.graph_version', 'v22.0');
+        $version = config('services.meta.graph_version', 'v19.0');
 
         $this->baseUrl = "https://graph.facebook.com/{$version}";
-        $this->accessToken = config('services.meta.token');
-        $this->defaultAccount = $this->formatAccount(
-            config('services.meta.ad_account_id')
-        );
+        $this->accessToken = config('services.meta.token') ?: null;
 
-        $this->debug = config('app.debug',false);
+        $accountId = config('services.meta.ad_account_id');
+        $this->defaultAccount = $accountId
+            ? $this->formatAccount($accountId)
+            : null;
 
-        if(!$this->accessToken){
-            throw new Exception('Meta access token missing in config/services.php');
+        $this->debug = config('app.debug', false);
+        $this->apiLogger = $apiLogger ?? new MetaApiLogger();
+
+        if ($this->accessToken && $this->defaultAccount) {
+            Log::info('META_SERVICE_INITIALIZED', [
+                'account' => $this->defaultAccount,
+                'graph_version' => $version,
+            ]);
         }
+    }
 
-        Log::info('META_SERVICE_INITIALIZED',[
-            'account'=>$this->defaultAccount,
-            'graph_version'=>$version
-        ]);
+    protected function ensureConfigured(): void
+    {
+        if (! $this->accessToken) {
+            throw new Exception(
+                'Meta access token missing. Copy .env.example to .env and set META_SYSTEM_USER_TOKEN.'
+            );
+        }
     }
 
     /*
@@ -56,18 +69,33 @@ class MetaAdsService
     |--------------------------------------------------------------------------
     */
 
-    protected function client()
+    protected function client(bool $forMutation = false, bool $forSearch = false)
     {
-        /*
-        |--------------------------------------------------------------------------
-        | No Http::retry() here
-        |--------------------------------------------------------------------------
-        | Laravel's Http retry pipeline can call $response->throw() on non-2xx
-        | responses before they are returned, so MetaAdsService::request() never
-        | reaches handleError() and callers only see RequestException.
-        |--------------------------------------------------------------------------
-        */
-        return Http::timeout(30)->acceptJson();
+        $connectTimeout = (int) config('services.meta.http_connect_timeout', 45);
+
+        if ($forMutation) {
+            $timeout = (int) config('services.meta.mutation_timeout', 25);
+
+            return Http::timeout($timeout)
+                ->connectTimeout(min($connectTimeout, 15))
+                ->acceptJson();
+        }
+
+        if ($forSearch) {
+            $timeout = (int) config('services.meta.search_timeout', 15);
+
+            return Http::timeout($timeout)
+                ->connectTimeout(min($connectTimeout, 10))
+                ->retry(1, 500)
+                ->acceptJson();
+        }
+
+        $timeout = (int) config('services.meta.http_timeout', 90);
+
+        return Http::timeout($timeout)
+            ->connectTimeout($connectTimeout)
+            ->retry(4, 2000)
+            ->acceptJson();
     }
 
     /*
@@ -101,9 +129,6 @@ protected function handleError($response, $endpoint, $payload = [])
 
     if (is_array($body) && isset($body['error']['message'])) {
         $message = $body['error']['message'];
-        if (! empty($body['error']['error_user_title'])) {
-            $message = $body['error']['error_user_title'] . ': ' . $message;
-        }
         if (! empty($body['error']['error_user_msg'])) {
             $message .= ' — ' . $body['error']['error_user_msg'];
         }
@@ -118,18 +143,13 @@ protected function handleError($response, $endpoint, $payload = [])
     |--------------------------------------------------------------------------
     */
 
-    $safePayload = $payload;
-    if (isset($safePayload['access_token'])) {
-        $safePayload['access_token'] = '[redacted]';
-    }
-
     Log::error('META_API_ERROR', [
 
         'endpoint' => $endpoint,
 
         'http_status' => $response->status(),
 
-        'payload' => $safePayload,
+        'payload' => $payload,
 
         'response' => $body,
 
@@ -154,23 +174,21 @@ protected function handleError($response, $endpoint, $payload = [])
     |--------------------------------------------------------------------------
     */
 
-    protected function request(string $method,string $endpoint,array $payload=[],bool $asForm=true)
+    protected function request(string $method, string $endpoint, array $payload = [], bool $asForm = true, bool $forMutation = false, int $attempt = 1)
     {
+        $this->ensureConfigured();
+
         $payload['access_token'] = $this->accessToken;
+        $started = microtime(true);
 
-        $logPayload = $payload;
-        if (isset($logPayload['access_token'])) {
-            $logPayload['access_token'] = '[redacted]';
-        }
-
-        Log::info("META_API_{$method}",[
-            'endpoint'=>$endpoint,
-            'payload'=>$logPayload
+        Log::info("META_API_{$method}", [
+            'endpoint' => $endpoint,
+            'payload' => $this->apiLogger->redactSecrets($payload),
         ]);
 
-        $client = $this->client();
+        $client = $this->client($forMutation);
 
-        if($asForm){
+        if ($asForm) {
             $client = $client->asForm();
         }
 
@@ -179,11 +197,54 @@ protected function handleError($response, $endpoint, $payload = [])
             $payload
         );
 
-        if($response->failed()){
-            $this->handleError($response,$endpoint,$payload);
+        $durationMs = (int) round((microtime(true) - $started) * 1000);
+        $body = null;
+
+        try {
+            $body = $response->json();
+        } catch (Throwable) {
+            $body = ['raw' => $response->body()];
         }
 
-        return $response->json();
+        if ($response->failed()) {
+            $metaCode = data_get($body, 'error.code');
+            $isRetryable = $this->apiLogger->isRetryableError(
+                is_numeric($metaCode) ? (int) $metaCode : null,
+                $response->status()
+            );
+
+            $this->apiLogger->log(
+                $method,
+                $endpoint,
+                $payload,
+                is_array($body) ? $body : null,
+                $response->status(),
+                false,
+                data_get($body, 'error.message'),
+                $durationMs
+            );
+
+            if ($isRetryable && $attempt < 3) {
+                usleep(500000 * $attempt);
+
+                return $this->request($method, $endpoint, $payload, $asForm, $forMutation, $attempt + 1);
+            }
+
+            $this->handleError($response, $endpoint, $payload);
+        }
+
+        $this->apiLogger->log(
+            $method,
+            $endpoint,
+            $payload,
+            is_array($body) ? $body : null,
+            $response->status(),
+            true,
+            null,
+            $durationMs
+        );
+
+        return $body;
     }
 
     /*
@@ -197,93 +258,15 @@ protected function handleError($response, $endpoint, $payload = [])
         return $this->request('get',$endpoint,$params,false);
     }
 
-    /**
-     * Follow Meta Graph API paging.next URLs (full URL from insights/cursor responses).
-     */
-    protected function getByPagingUrl(string $url): array
-    {
-        $response = $this->client()->get($url, [
-            'access_token' => $this->accessToken,
-        ]);
-
-        if ($response->failed()) {
-            $this->handleError($response, $url, []);
-        }
-
-        return $response->json();
-    }
-
-    /**
-     * @return list<array<string, mixed>>
-     */
-    protected function collectPagedData(string $endpoint, array $params): array
-    {
-        $rows = [];
-        $response = $this->get($endpoint, $params);
-
-        while (true) {
-            foreach ($response['data'] ?? [] as $row) {
-                if (is_array($row)) {
-                    $rows[] = $row;
-                }
-            }
-
-            $next = $response['paging']['next'] ?? null;
-            if (! is_string($next) || $next === '') {
-                break;
-            }
-
-            $response = $this->getByPagingUrl($next);
-        }
-
-        return $rows;
-    }
-
-    /**
-     * Whether ad set targeting still needs FB+IG platforms and placement positions.
-     *
-     * @param  array<string, mixed>  $targeting
-     */
-    public function targetingNeedsInstagramRepair(array $targeting): bool
-    {
-        $platforms = $targeting['publisher_platforms'] ?? [];
-
-        if (! is_array($platforms)) {
-            return true;
-        }
-
-        $extras = array_intersect($platforms, ['audience_network', 'messenger', 'unknown']);
-        if ($extras !== []) {
-            return true;
-        }
-
-        $normalized = array_values(array_unique($platforms));
-        sort($normalized);
-
-        if ($normalized !== ['facebook', 'instagram']) {
-            return true;
-        }
-
-        if (empty($targeting['instagram_positions']) || empty($targeting['facebook_positions'])) {
-            return true;
-        }
-
-        if (empty($targeting['device_platforms'])) {
-            return true;
-        }
-
-        return false;
-    }
-
     /*
     |--------------------------------------------------------------------------
     | POST
     |--------------------------------------------------------------------------
     */
 
-    protected function post(string $endpoint,array $payload=[]):array
+    protected function post(string $endpoint,array $payload=[], bool $forMutation = false):array
     {
-        return $this->request('post',$endpoint,$payload,true);
+        return $this->request('post',$endpoint,$payload,true, $forMutation);
     }
 
     /*
@@ -292,25 +275,9 @@ protected function handleError($response, $endpoint, $payload = [])
     |--------------------------------------------------------------------------
     */
 
-    protected function delete(string $endpoint): array
+    protected function delete(string $endpoint):array
     {
-        Log::info('META_API_delete', [
-            'endpoint' => $endpoint,
-            'payload' => ['access_token' => '[redacted]'],
-        ]);
-
-        // Meta Graph DELETE requires access_token as a query param, not a JSON body.
-        $url = "{$this->baseUrl}/{$endpoint}?" . http_build_query([
-            'access_token' => $this->accessToken,
-        ]);
-
-        $response = $this->client()->delete($url);
-
-        if ($response->failed()) {
-            $this->handleError($response, $endpoint, []);
-        }
-
-        return $response->json();
+        return $this->request('delete',$endpoint,[],false);
     }
 
     /*
@@ -341,17 +308,194 @@ protected function handleError($response, $endpoint, $payload = [])
     |--------------------------------------------------------------------------
     */
 
-    public function getPages():array
+    public function getPages(): array
     {
-        $res = $this->get('me/accounts');
-        return $res['data'] ?? [];
+        try {
+            $res = $this->get('me/accounts');
+            $data = $res['data'] ?? [];
+            if ($data !== []) {
+                return $data;
+            }
+        } catch (Throwable $e) {
+            Log::warning('META_GET_PAGES_FAILED', [
+                'message' => $e->getMessage(),
+            ]);
+        }
+
+        $pageId = config('services.meta.page_id');
+        if (! empty($pageId)) {
+            Log::info('META_GET_PAGES_USING_CONFIG_FALLBACK', [
+                'page_id' => $pageId,
+            ]);
+
+            return [
+                [
+                    'id' => (string) $pageId,
+                    'name' => (string) config('services.meta.page_name', 'Facebook Page'),
+                ],
+            ];
+        }
+
+        return [];
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | GET AD ACCOUNTS
+    |--------------------------------------------------------------------------
+    */
+
+    public function getAdAccounts(): array
+    {
+        $this->ensureConfigured();
+
+        return $this->get('me/adaccounts', [
+            'fields' => 'id,account_id,name,account_status,currency',
+            'limit' => 100,
+        ]);
     }
 
     /**
-     * Normalize and validate a website URL for object_story_spec.link_data (and CTAs).
-     * Use https and a real site hostname; Meta 1815520 is often a bad or Page-only link.
-     * Do not send the same URL as top-level object_url with object_story_spec (Meta 1487929).
+     * Ad accounts available for business self-registration (excludes platform main account).
+     *
+     * @return array<int, array{id:string,name:string,currency:?string,status:string}>
      */
+    public function getBusinessAdAccounts(): array
+    {
+        try {
+            $response = $this->getAdAccounts();
+        } catch (Throwable $e) {
+            Log::warning('META_GET_AD_ACCOUNTS_FAILED', [
+                'message' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
+
+        $platformId = $this->normalizeAccountId(config('services.meta.ad_account_id'));
+        $accounts = [];
+
+        foreach ($response['data'] ?? [] as $account) {
+            $id = (string) ($account['id'] ?? '');
+
+            if ($id === '') {
+                continue;
+            }
+
+            $normalized = $this->normalizeAccountId($id);
+
+            if ($platformId && $normalized === $platformId) {
+                continue;
+            }
+
+            $statusMap = [
+                1 => 'ACTIVE',
+                2 => 'DISABLED',
+                3 => 'UNSETTLED',
+                7 => 'PENDING',
+            ];
+
+            $accounts[] = [
+                'id' => $normalized,
+                'name' => (string) ($account['name'] ?? $normalized),
+                'currency' => $account['currency'] ?? null,
+                'status' => $statusMap[$account['account_status'] ?? null] ?? 'UNKNOWN',
+            ];
+        }
+
+        return $accounts;
+    }
+
+    protected function normalizeAccountId(?string $id): ?string
+    {
+        if (! $id) {
+            return null;
+        }
+
+        return str_starts_with($id, 'act_') ? $id : 'act_'.$id;
+    }
+
+    public function leadgenTosAcceptUrl(string $pageId): string
+    {
+        return 'https://www.facebook.com/ads/leadgen/tos?page_id='.urlencode($pageId);
+    }
+
+    /**
+     * @return array{accepted: bool, acceptance_time: ?string, page_name: ?string, error: ?string}
+     */
+    public function getPageLeadgenTosStatus(string $pageId): array
+    {
+        $this->ensureConfigured();
+
+        try {
+            $response = $this->get($pageId, [
+                'fields' => 'id,name,leadgen_tos_accepted,leadgen_tos_acceptance_time',
+            ]);
+
+            return [
+                'accepted' => (bool) ($response['leadgen_tos_accepted'] ?? false),
+                'acceptance_time' => $response['leadgen_tos_acceptance_time'] ?? null,
+                'page_name' => $response['name'] ?? null,
+                'error' => null,
+            ];
+        } catch (Throwable $e) {
+            Log::warning('META_LEADGEN_TOS_CHECK_FAILED', [
+                'page_id' => $pageId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'accepted' => false,
+                'acceptance_time' => null,
+                'page_name' => null,
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    public function formatLeadgenTosError(string $pageId, ?string $pageName = null): string
+    {
+        $label = $pageName ? 'Page "'.$pageName.'"' : 'This Facebook Page';
+        $url = $this->leadgenTosAcceptUrl($pageId);
+
+        return $label." must accept Meta Lead Generation Terms before lead ad sets can run. "
+            ."Open {$url} while logged in as a Page admin, click Accept, then try again.";
+    }
+
+    protected function isLeadgenTosError(Throwable $e): bool
+    {
+        return str_contains($e->getMessage(), '1815089')
+            || str_contains($e->getMessage(), 'Lead Generation Terms');
+    }
+
+    protected function enrichLeadgenTosError(Exception $e, array $payload): Exception
+    {
+        if (! $this->isLeadgenTosError($e)) {
+            return $e;
+        }
+
+        $pageId = null;
+        $promotedObject = $payload['promoted_object'] ?? null;
+
+        if (is_string($promotedObject)) {
+            $decoded = json_decode($promotedObject, true);
+            $pageId = $decoded['page_id'] ?? null;
+        } elseif (is_array($promotedObject)) {
+            $pageId = $promotedObject['page_id'] ?? null;
+        }
+
+        if (! $pageId) {
+            return $e;
+        }
+
+        $status = $this->getPageLeadgenTosStatus((string) $pageId);
+
+        return new Exception($this->formatLeadgenTosError(
+            (string) $pageId,
+            $status['page_name'] ?? null
+        ));
+    }
+
     public function normalizeLandingUrlForMeta(string $url, bool $strict = false): string
     {
         $url = trim($url);
@@ -393,8 +537,6 @@ protected function handleError($response, $endpoint, $payload = [])
     }
 
     /**
-     * URL variants to try when Meta rejects a link (1815520).
-     *
      * @return list<string>
      */
     public function landingUrlCandidates(string $url): array
@@ -427,53 +569,13 @@ protected function handleError($response, $endpoint, $payload = [])
         return array_values(array_unique(array_map(fn ($u) => rtrim($u, '/'), $candidates)));
     }
 
-    /**
-     * Derive conversion_domain (2nd+top-level) from a landing URL.
-     * Example: https://www.example.com/path -> example.com
-     */
-    public function conversionDomainFromUrl(string $url): string
-    {
-        $url = $this->normalizeLandingUrlForMeta($url);
-        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
-        $host = preg_replace('/^www\./i', '', $host);
-
-        $parts = array_values(array_filter(explode('.', (string) $host)));
-        if (count($parts) < 2) {
-            throw new Exception('Unable to derive conversion_domain from URL.');
-        }
-
-        return $parts[count($parts) - 2].'.'.$parts[count($parts) - 1];
-    }
-
-    /**
-     * Instagram user id linked to a Facebook Page (object_story_spec.instagram_user_id).
-     */
     public function getConnectedInstagramUserId(string $pageId): ?string
     {
         return $this->resolveInstagramUserId($pageId);
     }
 
-    /**
-     * Explicit Instagram id from .env (META_INSTAGRAM_USER_ID), when set.
-     */
-    public function configuredInstagramUserId(): ?string
+    public function resolveInstagramUserId(?string $pageId = null, ?string $accountId = null): ?string
     {
-        $fromEnv = trim((string) config('services.meta.instagram_user_id', ''));
-
-        return $fromEnv !== '' ? $fromEnv : null;
-    }
-
-    /**
-     * Instagram actor id for ad creatives.
-     * META_INSTAGRAM_USER_ID wins when set (so Page-linked wrong IG does not override).
-     */
-    public function resolveInstagramUserId(?string $pageId = null): ?string
-    {
-        $fromEnv = $this->configuredInstagramUserId();
-        if ($fromEnv !== null) {
-            return $fromEnv;
-        }
-
         foreach ($this->instagramPageIdCandidates($pageId) as $candidate) {
             $found = $this->lookupInstagramIdFromPage($candidate);
             if ($found !== null) {
@@ -481,38 +583,34 @@ protected function handleError($response, $endpoint, $payload = [])
             }
         }
 
-        $fromAccount = $this->lookupInstagramIdFromAdAccount();
+        $fromAccount = $this->lookupInstagramIdFromAdAccount($accountId);
         if ($fromAccount !== null) {
             return $fromAccount;
         }
 
-        return null;
+        $fromEnv = trim((string) config('services.meta.instagram_user_id', ''));
+
+        return $fromEnv !== '' ? $fromEnv : null;
     }
 
     /**
-     * Connection diagnostics for CLI / admin checks.
-     *
      * @return array<string, mixed>
      */
-    public function diagnoseInstagramConnection(?string $pageId = null): array
+    public function diagnoseInstagramConnection(?string $pageId = null, ?string $accountId = null): array
     {
-        $pageId = trim((string) ($pageId ?? config('services.meta.page_id', '')));
-        $envIg = $this->configuredInstagramUserId();
+        $pageId = trim((string) ($pageId ?? \App\Support\TenantScope::pageId() ?? config('services.meta.page_id', '')));
+        $accountId = $accountId ?? \App\Support\TenantScope::adAccountMetaId() ?? config('services.meta.ad_account_id');
         $report = [
             'page_id' => $pageId,
-            'ad_account_id' => config('services.meta.ad_account_id'),
-            'instagram_user_id' => $envIg,
-            'source' => $envIg !== null ? 'env:META_INSTAGRAM_USER_ID (override)' : null,
+            'ad_account_id' => $accountId,
+            'app' => 'WABA',
+            'instagram_user_id' => null,
+            'source' => null,
             'page_connected' => false,
-            'page_linked_instagram_id' => null,
-            'env_fallback' => $envIg !== null,
-            'ready' => $envIg !== null,
+            'env_fallback' => trim((string) config('services.meta.instagram_user_id', '')) !== '',
+            'ready' => false,
             'hints' => [],
         ];
-
-        if ($envIg !== null) {
-            $report['hints'][] = 'Using META_INSTAGRAM_USER_ID from .env. Rebuild creatives after changing: php artisan meta:ensure-brand-pages --force-creatives';
-        }
 
         if ($pageId !== '') {
             foreach (['connected_instagram_account{id,username}', 'instagram_business_account{id,username}'] as $fields) {
@@ -522,12 +620,9 @@ protected function handleError($response, $endpoint, $payload = [])
                     $account = $res[$key] ?? null;
                     if (is_array($account) && ! empty($account['id'])) {
                         $report['page_connected'] = true;
-                        $report['page_linked_instagram_id'] = (string) $account['id'];
+                        $report['instagram_user_id'] = (string) $account['id'];
                         $report['instagram_username'] = $account['username'] ?? null;
-                        if ($envIg === null) {
-                            $report['instagram_user_id'] = (string) $account['id'];
-                            $report['source'] = 'page:'.$key;
-                        }
+                        $report['source'] = 'page:'.$key;
                         break;
                     }
                 } catch (Exception $e) {
@@ -537,24 +632,25 @@ protected function handleError($response, $endpoint, $payload = [])
         }
 
         if ($report['instagram_user_id'] === null) {
-            $fromAccount = $this->lookupInstagramIdFromAdAccount();
+            $fromAccount = $this->lookupInstagramIdFromAdAccount($accountId);
             if ($fromAccount !== null) {
                 $report['instagram_user_id'] = $fromAccount;
                 $report['source'] = 'ad_account:instagram_accounts';
             }
         }
 
-        $report['ready'] = $report['instagram_user_id'] !== null && $report['instagram_user_id'] !== '';
-
-        if ($envIg !== null && $report['page_linked_instagram_id'] !== null && $report['page_linked_instagram_id'] !== $envIg) {
-            $report['hints'][] = 'Page '.$pageId.' is linked to a different Instagram ('.$report['page_linked_instagram_id'].'). Ads use .env id '.$envIg.' — run meta:ensure-brand-pages --force-creatives.';
+        if ($report['instagram_user_id'] === null && $report['env_fallback']) {
+            $report['instagram_user_id'] = trim((string) config('services.meta.instagram_user_id', ''));
+            $report['source'] = 'env:META_INSTAGRAM_USER_ID';
         }
+
+        $report['ready'] = $report['instagram_user_id'] !== null && $report['instagram_user_id'] !== '';
 
         if (! $report['ready']) {
             $report['hints'] = [
-                'Confirm the Page in META_PAGE_ID is linked to Instagram in business.facebook.com → Settings → Accounts.',
-                'Assign the Page to your Business portfolio and ensure the system user has access.',
-                'Or set META_INSTAGRAM_USER_ID in .env (Instagram account numeric ID).',
+                'WABA uses its own .env (META_AD_ACCOUNT_ID, META_PAGE_ID) — not xanderbot credentials.',
+                'Link this WABA Page to Instagram in Meta Business Suite, or set META_INSTAGRAM_USER_ID in WABA .env only.',
+                'Per-business: set meta_page_id on the client record so IG lookup uses the correct Page.',
             ];
         }
 
@@ -568,6 +664,7 @@ protected function handleError($response, $endpoint, $payload = [])
     {
         $ids = [
             trim((string) $pageId),
+            trim((string) (\App\Support\TenantScope::pageId() ?? '')),
             trim((string) config('services.meta.page_id', '')),
         ];
 
@@ -621,8 +718,6 @@ protected function handleError($response, $endpoint, $payload = [])
     }
 
     /**
-     * Force Facebook + Instagram placements (required for reliable IG delivery with link ads).
-     *
      * @param  array<string, mixed>  $targeting
      * @return array<string, mixed>
      */
@@ -634,20 +729,14 @@ protected function handleError($response, $endpoint, $payload = [])
             $platforms = [];
         }
 
-        $targeting['publisher_platforms'] = ['facebook', 'instagram'];
+        $merged = array_values(array_unique(array_merge($platforms, ['facebook', 'instagram'])));
 
-        unset(
-            $targeting['messenger_positions'],
-            $targeting['audience_network_positions'],
-        );
+        $targeting['publisher_platforms'] = $merged;
 
         return $this->enrichPlacementTargeting($targeting);
     }
 
-    /**
-     * Patch a live Meta ad set so Instagram is included in publisher_platforms.
-     */
-    public function ensureAdSetTargetsInstagram(string $adsetMetaId, bool $force = false): bool
+    public function ensureAdSetTargetsInstagram(string $adsetMetaId): bool
     {
         $meta = $this->getAdSet($adsetMetaId);
         $targeting = $meta['targeting'] ?? [];
@@ -661,11 +750,13 @@ protected function handleError($response, $endpoint, $payload = [])
             $targeting = [];
         }
 
-        $patched = $this->applyFacebookInstagramPlacements($targeting);
+        $platforms = $targeting['publisher_platforms'] ?? [];
 
-        if (! $force && ! $this->targetingNeedsInstagramRepair($targeting) && $this->targetingEquivalent($targeting, $patched)) {
+        if (is_array($platforms) && in_array('instagram', $platforms, true)) {
             return false;
         }
+
+        $patched = $this->applyFacebookInstagramPlacements($targeting);
 
         $this->updateAdSet($adsetMetaId, [
             'targeting' => json_encode($patched, JSON_THROW_ON_ERROR),
@@ -674,81 +765,6 @@ protected function handleError($response, $endpoint, $payload = [])
         return true;
     }
 
-    /**
-     * Ensure the ad set promotes the brand Facebook Page (required for Page + IG ad delivery).
-     */
-    public function ensureAdSetPromotedPage(string $adsetMetaId, string $pageId): bool
-    {
-        $pageId = trim($pageId);
-
-        if ($pageId === '') {
-            return false;
-        }
-
-        $meta = $this->getAdSet($adsetMetaId);
-        $promoted = $meta['promoted_object'] ?? [];
-
-        if (is_string($promoted)) {
-            $decoded = json_decode($promoted, true);
-            $promoted = is_array($decoded) ? $decoded : [];
-        }
-
-        if (! is_array($promoted)) {
-            $promoted = [];
-        }
-
-        if ((string) ($promoted['page_id'] ?? '') === $pageId) {
-            return false;
-        }
-
-        $promoted['page_id'] = $pageId;
-
-        $this->updateAdSet($adsetMetaId, [
-            'promoted_object' => json_encode($promoted, JSON_THROW_ON_ERROR),
-        ]);
-
-        return true;
-    }
-
-    /**
-     * Compare targeting payloads (ignore key order).
-     *
-     * @param  array<string, mixed>  $a
-     * @param  array<string, mixed>  $b
-     */
-    public function targetingEquivalent(array $a, array $b): bool
-    {
-        return json_encode($this->normalizeTargetingForCompare($a))
-            === json_encode($this->normalizeTargetingForCompare($b));
-    }
-
-    /**
-     * @param  array<string, mixed>  $targeting
-     * @return array<string, mixed>
-     */
-    protected function normalizeTargetingForCompare(array $targeting): array
-    {
-        $copy = $targeting;
-        ksort($copy);
-
-        if (isset($copy['publisher_platforms']) && is_array($copy['publisher_platforms'])) {
-            $copy['publisher_platforms'] = array_values(array_unique($copy['publisher_platforms']));
-            sort($copy['publisher_platforms']);
-        }
-
-        foreach (['facebook_positions', 'instagram_positions', 'device_platforms'] as $key) {
-            if (isset($copy[$key]) && is_array($copy[$key])) {
-                $copy[$key] = array_values(array_unique($copy[$key]));
-                sort($copy[$key]);
-            }
-        }
-
-        return $copy;
-    }
-
-    /**
-     * Swap an ad's creative on Meta (new creative must include instagram_user_id for IG).
-     */
     public function attachCreativeToAd(string $adId, string $creativeId): array
     {
         return $this->updateAd($adId, [
@@ -802,6 +818,71 @@ protected function handleError($response, $endpoint, $payload = [])
     | TARGETING BUILDER
     |--------------------------------------------------------------------------
     */
+
+protected function buildTargeting(array $targeting): array
+{
+    unset($targeting['locales']);
+
+    if (! empty($targeting['geo_locations'])) {
+        $targeting['geo_locations'] = $this->normalizeGeoLocationsForApi(
+            $targeting['geo_locations']
+        );
+    }
+
+    if (! empty($targeting['flexible_spec'])) {
+        $targeting = $this->sanitizeFlexibleSpec($targeting);
+    }
+
+    if (! empty($targeting['publisher_platforms'])) {
+        $targeting = $this->enrichPlacementTargeting($targeting);
+    }
+
+    $targeting = $this->applyTargetingAutomation($targeting);
+
+    Log::info('META_TARGETING_FINAL', $targeting);
+
+    return $targeting;
+}
+
+    /**
+     * Meta requires targeting_automation.advantage_audience (0 or 1) on all ad sets.
+     */
+    protected function applyTargetingAutomation(array $targeting): array
+    {
+        if (isset($targeting['targeting_automation']['advantage_audience'])) {
+            $targeting['targeting_automation']['advantage_audience'] =
+                (int) $targeting['targeting_automation']['advantage_audience'] === 1 ? 1 : 0;
+
+            return $targeting;
+        }
+
+        $configured = config('services.meta.advantage_audience');
+
+        if ($configured !== null && $configured !== '') {
+            $advantageAudience = (int) $configured === 1 ? 1 : 0;
+        } else {
+            $hasManualAudience = ! empty($targeting['flexible_spec'])
+                || ! empty($targeting['publisher_platforms'])
+                || ! empty($targeting['exclusions']);
+
+            $advantageAudience = $hasManualAudience ? 0 : 1;
+        }
+
+        $targeting['targeting_automation'] = [
+            'advantage_audience' => $advantageAudience,
+        ];
+
+        return $targeting;
+    }
+
+    protected function isAdvantageAudienceError(Throwable $e): bool
+    {
+        $message = $e->getMessage();
+
+        return str_contains($message, '1870227')
+            || str_contains($message, 'advantage_audience')
+            || str_contains($message, 'Advantage audience flag required');
+    }
 
     /**
      * Build geo_locations from country codes and optional city entries.
@@ -915,6 +996,182 @@ protected function handleError($response, $endpoint, $payload = [])
     }
 
     /**
+     * Remove deprecated or invalid interest IDs (Meta subcode 2446394/2446395).
+     */
+    protected function sanitizeFlexibleSpec(array $targeting): array
+    {
+        if (empty($targeting['flexible_spec']) || ! is_array($targeting['flexible_spec'])) {
+            unset($targeting['flexible_spec']);
+            return $targeting;
+        }
+
+        $interestIds = [];
+
+        foreach ($targeting['flexible_spec'] as $spec) {
+            foreach ($spec['interests'] ?? [] as $interest) {
+                $id = trim((string) ($interest['id'] ?? ''));
+                if ($id !== '') {
+                    $interestIds[] = $id;
+                }
+            }
+        }
+
+        $interestIds = array_values(array_unique($interestIds));
+
+        if ($interestIds === []) {
+            unset($targeting['flexible_spec']);
+            return $targeting;
+        }
+
+        $targeting['flexible_spec'] = [[
+            'interests' => array_map(
+                fn ($id) => ['id' => (string) $id],
+                $interestIds
+            ),
+        ]];
+
+        return $targeting;
+    }
+
+    protected function isDetailedTargetingError(Throwable $e): bool
+    {
+        $message = $e->getMessage();
+
+        return str_contains($message, '2446394')
+            || str_contains($message, '2446395')
+            || str_contains($message, '1870247')
+            || str_contains($message, '1487694')
+            || str_contains($message, 'deprecated_interest')
+            || str_contains($message, 'detailed targeting')
+            || str_contains($message, 'no longer available')
+            || str_contains($message, 'alternative options');
+    }
+
+    /**
+     * Parse Meta's deprecated-interest alternatives from an API error message.
+     *
+     * @return array<string, string> Map of deprecated_interest_id => alternative_interest_id
+     */
+    protected function extractInterestAlternatives(string $message): array
+    {
+        $replacements = [];
+
+        if (preg_match('/Relevant alternative options:\s*(\[.*\])\s*(?:\(|$)/s', $message, $matches)) {
+            $options = json_decode($matches[1], true);
+        } elseif (preg_match('/(\[{"deprecated_interest_id".*?\}])/s', $message, $matches)) {
+            $options = json_decode($matches[1], true);
+        } else {
+            $options = null;
+        }
+
+        if (! is_array($options)) {
+            return $replacements;
+        }
+
+        foreach ($options as $option) {
+            if (! is_array($option)) {
+                continue;
+            }
+
+            $deprecated = trim((string) ($option['deprecated_interest_id'] ?? ''));
+            $alternative = trim((string) ($option['alternative_interest_id'] ?? ''));
+
+            if ($deprecated !== '' && $alternative !== '') {
+                $replacements[$deprecated] = $alternative;
+            }
+        }
+
+        return $replacements;
+    }
+
+    /**
+     * Swap deprecated interest IDs for Meta-suggested alternatives.
+     */
+    public function applyInterestReplacements(array $targeting, array $replacements): ?array
+    {
+        if ($replacements === [] || empty($targeting['flexible_spec'])) {
+            return null;
+        }
+
+        $changed = false;
+
+        foreach ($targeting['flexible_spec'] as $specIndex => $spec) {
+            foreach ($spec['interests'] ?? [] as $interestIndex => $interest) {
+                $id = trim((string) ($interest['id'] ?? ''));
+
+                if ($id === '' || ! isset($replacements[$id])) {
+                    continue;
+                }
+
+                $targeting['flexible_spec'][$specIndex]['interests'][$interestIndex]['id']
+                    = (string) $replacements[$id];
+                $changed = true;
+            }
+        }
+
+        return $changed ? $targeting : null;
+    }
+
+    protected function stripInterestTargeting(array $targeting): array
+    {
+        unset($targeting['flexible_spec']);
+
+        return $targeting;
+    }
+
+    /**
+     * @return string[] Valid Meta interest IDs
+     */
+    public function validateInterestIds(array $interestIds): array
+    {
+        $interestIds = array_values(array_unique(array_filter(array_map(
+            fn ($id) => trim((string) $id),
+            $interestIds
+        ))));
+
+        if ($interestIds === []) {
+            return [];
+        }
+
+        $this->ensureConfigured();
+
+        try {
+            $response = $this->client(forSearch: true)->get("{$this->baseUrl}/search", [
+                'type' => 'adinterestvalid',
+                'interest_list' => json_encode($interestIds),
+                'access_token' => $this->accessToken,
+            ]);
+
+            if ($response->failed()) {
+                Log::warning('META_INTEREST_VALIDATION_FAILED', [
+                    'interest_ids' => $interestIds,
+                    'response' => $response->body(),
+                ]);
+
+                return $interestIds;
+            }
+
+            $result = $response->json();
+            $valid = [];
+
+            foreach ($result['data'] ?? [] as $item) {
+                if (($item['valid'] ?? false) && ! empty($item['id'])) {
+                    $valid[] = (string) $item['id'];
+                }
+            }
+
+            return $valid;
+        } catch (Throwable $e) {
+            Log::warning('META_INTEREST_VALIDATION_ERROR', [
+                'interest_ids' => $interestIds,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $interestIds;
+        }
+    }
+
+    /**
      * Search cities, regions, or countries via Meta Targeting Search.
      */
     public function searchGeoLocations(
@@ -927,6 +1184,8 @@ protected function handleError($response, $endpoint, $payload = [])
         if (strlen($query) < 2) {
             return [];
         }
+
+        $this->ensureConfigured();
 
         $allowedTypes = ['city', 'country', 'region', 'zip'];
         if (! in_array($locationType, $allowedTypes, true)) {
@@ -945,7 +1204,7 @@ protected function handleError($response, $endpoint, $payload = [])
             $params['country_code'] = strtoupper(trim($countryCode));
         }
 
-        $response = Http::timeout(10)->get("{$this->baseUrl}/search", $params);
+        $response = $this->client(forSearch: true)->get("{$this->baseUrl}/search", $params);
 
         if ($response->failed()) {
             Log::warning('META_GEO_SEARCH_FAILED', [
@@ -974,181 +1233,13 @@ protected function handleError($response, $endpoint, $payload = [])
         })->filter(fn ($item) => $item['key'] !== '' && $item['name'] !== '')->values()->all();
     }
 
-protected function buildTargeting(array $targeting): array
-{
-    /*
-    |--------------------------------------------------------------------------
-    | Remove locales (Meta rejects them at ad set level)
-    |--------------------------------------------------------------------------
-    */
-
-    unset($targeting['locales']);
-
-    if (! empty($targeting['geo_locations'])) {
-        $targeting['geo_locations'] = $this->normalizeGeoLocationsForApi(
-            $targeting['geo_locations']
-        );
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Manual placements: Meta expects position arrays alongside publisher_platforms.
-    |--------------------------------------------------------------------------
-    */
-
-    if (! empty($targeting['publisher_platforms'])) {
-        $targeting = $this->enrichPlacementTargeting($targeting);
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Advantage audience: Meta API v19+ requires explicit flag (subcode 1870227)
-    |--------------------------------------------------------------------------
-    */
-
-    $targeting = $this->applyAdvantageAudienceFlag($targeting);
-
-    Log::info('META_TARGETING_FINAL', $targeting);
-
-    return $targeting;
-}
-
-    /**
-     * Meta requires advantage_audience to be explicitly 1 or 0 in targeting_automation.
-     *
-     * @param  array<string, mixed>  $targeting
-     * @return array<string, mixed>
-     */
-    public function applyAdvantageAudienceFlag(array $targeting): array
+    protected function resolveDestinationType(string $optimizationGoal): ?string
     {
-        if (isset($targeting['targeting_automation']['advantage_audience'])) {
-            $targeting['targeting_automation']['advantage_audience'] = (int) $targeting['targeting_automation']['advantage_audience'] ? 1 : 0;
-
-            return $targeting;
-        }
-
-        $targeting['targeting_automation'] = [
-            'advantage_audience' => $this->shouldEnableAdvantageAudience($targeting) ? 1 : 0,
-        ];
-
-        return $targeting;
-    }
-
-    /**
-     * @param  array<string, mixed>  $targeting
-     */
-    protected function shouldEnableAdvantageAudience(array $targeting): bool
-    {
-        if (! empty($targeting['flexible_spec'])) {
-            return false;
-        }
-
-        if (! empty($targeting['genders']) || isset($targeting['age_min'], $targeting['age_max'])) {
-            return false;
-        }
-
-        return false;
-    }
-
-    /**
-     * Meta subcode 1870247: some interest IDs were merged/deprecated. The error_user_msg
-     * includes "Relevant alternative options: [{...}]" — parse and return that list.
-     *
-     * @return list<array{deprecated_interest_id?:string,alternative_interest_id?:string,...}>
-     */
-    protected function parseInterestDeprecationAlternativesFromMessage(string $message): array
-    {
-        $marker = 'Relevant alternative options:';
-        $pos = stripos($message, $marker);
-        if ($pos === false) {
-            return [];
-        }
-
-        $start = strpos($message, '[', $pos);
-        if ($start === false) {
-            return [];
-        }
-
-        $depth = 0;
-        $len = strlen($message);
-        for ($i = $start; $i < $len; $i++) {
-            $c = $message[$i];
-            if ($c === '[') {
-                $depth++;
-            } elseif ($c === ']') {
-                $depth--;
-                if ($depth === 0) {
-                    $json = substr($message, $start, $i - $start + 1);
-                    $decoded = json_decode($json, true);
-
-                    return is_array($decoded) ? $decoded : [];
-                }
-            }
-        }
-
-        return [];
-    }
-
-    /**
-     * Replace deprecated interest IDs in flexible_spec using Meta's suggested alternatives.
-     *
-     * @param  list<array<string, mixed>>  $alternatives
-     * @return array{0: array, 1: bool}  [patched targeting, whether any id changed]
-     */
-    protected function applyInterestDeprecationAlternatives(array $targeting, array $alternatives): array
-    {
-        $map = [];
-        foreach ($alternatives as $row) {
-            if (! is_array($row)) {
-                continue;
-            }
-            $dep = $row['deprecated_interest_id'] ?? null;
-            $alt = $row['alternative_interest_id'] ?? null;
-            if ($dep !== null && $dep !== '' && $alt !== null && $alt !== '') {
-                $map[(string) $dep] = (string) $alt;
-            }
-        }
-
-        if ($map === []) {
-            return [$targeting, false];
-        }
-
-        if (empty($targeting['flexible_spec']) || ! is_array($targeting['flexible_spec'])) {
-            return [$targeting, false];
-        }
-
-        $changed = false;
-        $out = $targeting;
-        foreach ($out['flexible_spec'] as &$group) {
-            if (! is_array($group) || empty($group['interests']) || ! is_array($group['interests'])) {
-                continue;
-            }
-            foreach ($group['interests'] as &$interest) {
-                $id = (string) ($interest['id'] ?? '');
-                if ($id !== '' && isset($map[$id])) {
-                    $interest['id'] = $map[$id];
-                    $changed = true;
-                }
-            }
-        }
-
-        return [$out, $changed];
-    }
-
-    /**
-     * When createAdSet fails with 1870247, call this with the same targeting and exception message
-     * to obtain an updated targeting array, or null if nothing could be applied.
-     */
-    public function patchTargetingFrom1870247Error(array $targeting, string $message): ?array
-    {
-        if (! preg_match('/\(Meta subcode\s+1870247\)/i', $message)) {
-            return null;
-        }
-
-        $alternatives = $this->parseInterestDeprecationAlternativesFromMessage($message);
-        [$patched, $changed] = $this->applyInterestDeprecationAlternatives($targeting, $alternatives);
-
-        return $changed ? $patched : null;
+        return match (strtoupper($optimizationGoal)) {
+            'LEAD_GENERATION', 'QUALITY_LEAD' => 'ON_AD',
+            'CONVERSATIONS', 'REPLIES' => 'WHATSAPP',
+            default => null,
+        };
     }
 
     /**
@@ -1168,7 +1259,11 @@ protected function buildTargeting(array $targeting): array
         }
 
         if (in_array('instagram', $platforms, true)) {
-            $targeting['instagram_positions'] = ['stream', 'story', 'reels', 'explore', 'profile_feed'];
+            $targeting['instagram_positions'] = $targeting['instagram_positions'] ?? [
+                'stream',
+                'story',
+                'reels',
+            ];
         }
 
         if (in_array('messenger', $platforms, true)) {
@@ -1211,147 +1306,6 @@ protected function buildTargeting(array $targeting): array
     public function targetingWithFacebookAndInstagram(array $targeting): array
     {
         return $this->applyFacebookInstagramPlacements($targeting);
-    }
-
-    public function normalizeCampaignObjective(?string $objective): string
-    {
-        return strtoupper(trim((string) $objective));
-    }
-
-    /**
-     * Ordered optimization goals to try for a campaign objective (Meta ODAX).
-     *
-     * @return list<string>
-     */
-    public function optimizationGoalCandidates(string $objective, ?string $preferred = null): array
-    {
-        $objective = $this->normalizeCampaignObjective($objective);
-
-        $byObjective = [
-            'OUTCOME_TRAFFIC' => ['LANDING_PAGE_VIEWS', 'LINK_CLICKS', 'REACH'],
-            'TRAFFIC' => ['LANDING_PAGE_VIEWS', 'LINK_CLICKS', 'REACH'],
-            'OUTCOME_LEADS' => ['LEAD_GENERATION'],
-            'LEADS' => ['LEAD_GENERATION'],
-            'OUTCOME_SALES' => ['OFFSITE_CONVERSIONS', 'LANDING_PAGE_VIEWS', 'LINK_CLICKS'],
-            'SALES' => ['OFFSITE_CONVERSIONS', 'LANDING_PAGE_VIEWS', 'LINK_CLICKS'],
-            'OUTCOME_AWARENESS' => ['REACH', 'IMPRESSIONS'],
-            'AWARENESS' => ['REACH', 'IMPRESSIONS'],
-            'OUTCOME_ENGAGEMENT' => ['POST_ENGAGEMENT', 'REACH'],
-            'ENGAGEMENT' => ['POST_ENGAGEMENT', 'REACH'],
-            'OUTCOME_APP_PROMOTION' => ['APP_INSTALLS', 'LINK_CLICKS'],
-            'APP_PROMOTION' => ['APP_INSTALLS', 'LINK_CLICKS'],
-        ];
-
-        $candidates = $byObjective[$objective] ?? [
-            'LANDING_PAGE_VIEWS',
-            'LINK_CLICKS',
-            'REACH',
-            'IMPRESSIONS',
-            'LEAD_GENERATION',
-            'OFFSITE_CONVERSIONS',
-            'POST_ENGAGEMENT',
-        ];
-
-        if ($preferred !== null) {
-            $preferred = strtoupper(trim($preferred));
-            if ($preferred !== '' && in_array($preferred, $candidates, true)) {
-                $candidates = array_values(array_unique(array_merge([$preferred], $candidates)));
-            }
-        }
-
-        return $candidates;
-    }
-
-    public function resolveOptimizationGoal(string $objective, ?string $requested = null): string
-    {
-        $candidates = $this->optimizationGoalCandidates($objective, $requested);
-
-        return $candidates[0];
-    }
-
-    public function isOptimizationGoalMismatchError(string $message): bool
-    {
-        return str_contains($message, '2490408')
-            || str_contains($message, "Performance goal isn't available")
-            || (str_contains($message, 'optimization_goal') && str_contains($message, 'Invalid parameter'));
-    }
-
-    /**
-     * Create an ad set, auto-picking a valid optimization goal and retrying on Meta 2490408.
-     *
-     * @param  array<string, mixed>  $data
-     * @return array{response: array, optimization_goal: string, targeting: array}
-     */
-    public function createAdSetResilient(string $accountId, array $data, string $campaignObjective): array
-    {
-        $preferred = isset($data['optimization_goal']) ? (string) $data['optimization_goal'] : null;
-        $goals = $this->optimizationGoalCandidates($campaignObjective, $preferred);
-        $targeting = $data['targeting'] ?? [];
-
-        if (! is_array($targeting)) {
-            throw new Exception('Invalid targeting structure');
-        }
-
-        $lastError = null;
-
-        foreach ($goals as $goal) {
-            $data['optimization_goal'] = $goal;
-            $targetingForMeta = $targeting;
-
-            for ($attempt = 0; $attempt < 5; $attempt++) {
-                $data['targeting'] = $targetingForMeta;
-
-                try {
-                    $response = $this->createAdSet($accountId, $data);
-
-                    Log::info('META_ADSET_GOAL_RESOLVED', [
-                        'campaign_objective' => $this->normalizeCampaignObjective($campaignObjective),
-                        'optimization_goal' => $goal,
-                        'attempt' => $attempt + 1,
-                    ]);
-
-                    return [
-                        'response' => $response,
-                        'optimization_goal' => $goal,
-                        'targeting' => $targetingForMeta,
-                    ];
-                } catch (Exception $e) {
-                    $patched = $this->patchTargetingFrom1870247Error(
-                        $targetingForMeta,
-                        $e->getMessage()
-                    );
-
-                    if ($patched !== null) {
-                        $targetingForMeta = $patched;
-
-                        Log::info('META_ADSET_1870247_PATCH_RETRY', [
-                            'optimization_goal' => $goal,
-                            'attempt' => $attempt + 1,
-                        ]);
-
-                        continue;
-                    }
-
-                    if ($this->isOptimizationGoalMismatchError($e->getMessage())) {
-                        $lastError = $e;
-
-                        Log::warning('META_ADSET_GOAL_RETRY', [
-                            'campaign_objective' => $this->normalizeCampaignObjective($campaignObjective),
-                            'failed_goal' => $goal,
-                            'error' => $e->getMessage(),
-                        ]);
-
-                        break;
-                    }
-
-                    throw $e;
-                }
-            }
-        }
-
-        throw $lastError ?? new Exception(
-            'Unable to find a performance goal compatible with campaign objective '.$campaignObjective.'.'
-        );
     }
 
    /*
@@ -1414,8 +1368,6 @@ public function createAdSet(string $accountId, array $data): array
 
     $targeting = $this->buildTargeting($targeting);
 
-    $targeting = $this->applyFacebookInstagramPlacements($targeting);
-
 /*
 |--------------------------------------------------------------------------
 | Safety: ensure array
@@ -1442,10 +1394,7 @@ if (!is_array($targeting)) {
 
         'billing_event' => $data['billing_event'] ?? 'IMPRESSIONS',
 
-        'optimization_goal' => $data['optimization_goal'] ?? $this->resolveOptimizationGoal(
-            (string) ($data['campaign_objective'] ?? 'OUTCOME_TRAFFIC'),
-            isset($data['optimization_goal']) ? (string) $data['optimization_goal'] : null
-        ),
+        'optimization_goal' => $data['optimization_goal'] ?? 'LINK_CLICKS',
 
         'bid_strategy' => $data['bid_strategy'] ?? 'LOWEST_COST_WITHOUT_CAP',
 
@@ -1469,6 +1418,13 @@ if (!is_array($targeting)) {
             : $data['promoted_object'];
     }
 
+    $destinationType = $data['destination_type']
+        ?? $this->resolveDestinationType((string) ($payload['optimization_goal'] ?? ''));
+
+    if ($destinationType) {
+        $payload['destination_type'] = $destinationType;
+    }
+
     /*
     |--------------------------------------------------------------------------
     | DEBUG LOG
@@ -1480,25 +1436,115 @@ if (!is_array($targeting)) {
         'payload' => $payload
     ]);
 
+    $optimizationGoal = strtoupper((string) ($payload['optimization_goal'] ?? ''));
+
+    if (in_array($optimizationGoal, ['LEAD_GENERATION', 'QUALITY_LEAD'], true)) {
+        $pageId = null;
+        $promotedObject = $data['promoted_object'] ?? null;
+
+        if (is_array($promotedObject)) {
+            $pageId = $promotedObject['page_id'] ?? null;
+        }
+
+        if ($pageId) {
+            $tosStatus = $this->getPageLeadgenTosStatus((string) $pageId);
+
+            if (! $tosStatus['accepted']) {
+                throw new Exception($this->formatLeadgenTosError(
+                    (string) $pageId,
+                    $tosStatus['page_name'] ?? null
+                ));
+            }
+        }
+    }
+
     /*
     |--------------------------------------------------------------------------
-    | API REQUEST
+    | API REQUEST (auto-retry deprecated interests & targeting fallbacks)
     |--------------------------------------------------------------------------
     */
 
-    $response = $this->post("{$accountId}/adsets", $payload);
+    $interestReplacements = [];
+    $interestsRemoved = false;
+    $lastException = null;
+    $maxAttempts = 5;
 
-    /*
-    |--------------------------------------------------------------------------
-    | RESPONSE LOG
-    |--------------------------------------------------------------------------
-    */
+    for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+        try {
+            $response = $this->post("{$accountId}/adsets", $payload, true);
 
-    Log::info('META_ADSET_CREATED', [
-        'response' => $response
-    ]);
+            Log::info('META_ADSET_CREATED', [
+                'response' => $response,
+                'attempt' => $attempt,
+            ]);
 
-    return $response;
+            if ($interestReplacements !== []) {
+                $response['_meta_interest_replacements'] = $interestReplacements;
+            }
+
+            if ($interestsRemoved) {
+                $response['_meta_interests_removed'] = true;
+            }
+
+            return $response;
+        } catch (Exception $e) {
+            $lastException = $e;
+
+            if ($this->isLeadgenTosError($e)) {
+                throw $this->enrichLeadgenTosError($e, $payload);
+            }
+
+            if ($this->isAdvantageAudienceError($e)) {
+                $targeting = $this->applyTargetingAutomation($targeting);
+                $payload['targeting'] = json_encode($targeting);
+
+                Log::warning('META_ADSET_RETRY_WITH_ADVANTAGE_AUDIENCE', [
+                    'attempt' => $attempt,
+                    'targeting_automation' => $targeting['targeting_automation'] ?? null,
+                ]);
+
+                continue;
+            }
+
+            $message = $e->getMessage();
+
+            $alternatives = $this->extractInterestAlternatives($message);
+            $updatedTargeting = $this->applyInterestReplacements($targeting, $alternatives);
+
+            if ($updatedTargeting !== null) {
+                foreach ($alternatives as $deprecatedId => $alternativeId) {
+                    $interestReplacements[$deprecatedId] = $alternativeId;
+                }
+
+                $targeting = $updatedTargeting;
+                $payload['targeting'] = json_encode($targeting);
+
+                Log::warning('META_ADSET_RETRY_WITH_INTEREST_ALTERNATIVES', [
+                    'attempt' => $attempt,
+                    'replacements' => $alternatives,
+                ]);
+
+                continue;
+            }
+
+            if (! empty($targeting['flexible_spec']) && $this->isDetailedTargetingError($e)) {
+                $targeting = $this->stripInterestTargeting($targeting);
+                $payload['targeting'] = json_encode($targeting);
+                $interestsRemoved = true;
+
+                Log::warning('META_ADSET_RETRY_WITHOUT_INTERESTS', [
+                    'attempt' => $attempt,
+                    'reason' => $message,
+                ]);
+
+                continue;
+            }
+
+            throw $e;
+        }
+    }
+
+    throw $lastException ?? new Exception('Meta ad set creation failed after retries.');
 }
     public function deleteAdSet(string $adsetId):array
     {
@@ -1511,202 +1557,68 @@ if (!is_array($targeting)) {
     |--------------------------------------------------------------------------
     */
 
-    public function uploadImage(string $accountId, string $filePath): array
+    public function uploadImage(string $accountId,string $filePath):array
     {
-        if (! is_file($filePath) || ! is_readable($filePath)) {
-            throw new Exception('Image file not found or not readable. Check server storage permissions.');
-        }
-
-        $preparedPath = $this->prepareImageForMetaUpload($filePath);
-        $cleanupPrepared = $preparedPath !== $filePath;
-
-        try {
-            return $this->uploadImageToMetaAccount($accountId, $preparedPath);
-        } finally {
-            if ($cleanupPrepared && is_file($preparedPath)) {
-                @unlink($preparedPath);
-            }
-        }
-    }
-
-    /**
-     * Resize/compress large creatives so Meta adimages accepts them.
-     */
-    public function prepareImageForMetaUpload(string $filePath): string
-    {
-        $info = @getimagesize($filePath);
-
-        if ($info === false || ! function_exists('imagecreatetruecolor')) {
-            return $filePath;
-        }
-
-        $width = (int) ($info[0] ?? 0);
-        $height = (int) ($info[1] ?? 0);
-        $type = (int) ($info[2] ?? 0);
-        $maxDim = 2048;
-        $maxBytes = 4 * 1024 * 1024;
-        $size = (int) filesize($filePath);
-
-        $scale = min(1.0, $maxDim / max($width, $height, 1));
-
-        if ($scale >= 1.0 && $size <= $maxBytes) {
-            return $filePath;
-        }
-
-        $src = match ($type) {
-            IMAGETYPE_JPEG => @imagecreatefromjpeg($filePath),
-            IMAGETYPE_PNG => @imagecreatefrompng($filePath),
-            IMAGETYPE_WEBP => function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($filePath) : false,
-            default => false,
-        };
-
-        if ($src === false) {
-            return $filePath;
-        }
-
-        $newW = max(1, (int) round($width * $scale));
-        $newH = max(1, (int) round($height * $scale));
-        $dst = imagecreatetruecolor($newW, $newH);
-        $white = imagecolorallocate($dst, 255, 255, 255);
-        imagefill($dst, 0, 0, $white);
-        imagecopyresampled($dst, $src, 0, 0, 0, 0, $newW, $newH, $width, $height);
-        imagedestroy($src);
-
-        $tempPath = sys_get_temp_dir().DIRECTORY_SEPARATOR.'meta_ad_'.uniqid('', true).'.jpg';
-
-        if (! imagejpeg($dst, $tempPath, 85)) {
-            imagedestroy($dst);
-
-            return $filePath;
-        }
-
-        imagedestroy($dst);
-
-        Log::info('META_IMAGE_PREPARED', [
-            'from' => $filePath,
-            'to' => $tempPath,
-            'original' => "{$width}x{$height}",
-            'prepared' => "{$newW}x{$newH}",
-            'bytes' => filesize($tempPath),
-        ]);
-
-        return $tempPath;
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    protected function uploadImageToMetaAccount(string $accountId, string $filePath): array
-    {
-        $this->validateImageForMetaUpload($filePath);
+        $this->ensureConfigured();
 
         $accountId = $this->formatAccount($accountId);
-        $fileName = basename($filePath);
-        $timeout = max(120, (int) config('services.meta.http_timeout', 90));
-        $connectTimeout = (int) config('services.meta.http_connect_timeout', 45);
 
-        Log::info('META_UPLOAD_IMAGE', [
-            'account' => $accountId,
-            'file' => $filePath,
-            'bytes' => filesize($filePath),
+        Log::info('META_UPLOAD_IMAGE',[
+            'account'=>$accountId,
+            'file'=>$filePath
         ]);
 
-        // Prefer bytes (base64) — Meta's documented approach.
-        $encoded = base64_encode((string) file_get_contents($filePath));
+        $timeout = (int) config('services.meta.http_timeout', 90);
+        $connectTimeout = (int) config('services.meta.http_connect_timeout', 45);
 
-        $bytesResponse = Http::timeout($timeout)
+        $response = Http::timeout(max(60, $timeout))
             ->connectTimeout($connectTimeout)
-            ->asForm()
+            ->attach(
+                'filename',
+                file_get_contents($filePath),
+                basename($filePath)
+            )
             ->post("{$this->baseUrl}/{$accountId}/adimages", [
                 'access_token' => $this->accessToken,
-                'bytes' => $encoded,
-                'name' => $fileName,
             ]);
 
-        if ($bytesResponse->successful()) {
-            $json = $bytesResponse->json();
-
-            if ($this->extractImageHashFromUploadResponse($json) !== null) {
-                return $json;
-            }
+        if($response->failed()){
+            $this->handleError($response,'uploadImage');
         }
 
-        if ($bytesResponse->failed()) {
-            Log::warning('META_UPLOAD_IMAGE_BYTES_FAILED', [
-                'status' => $bytesResponse->status(),
-                'body' => $bytesResponse->json(),
-            ]);
-        }
-
-        // Fallback: multipart filename upload
-        $mime = mime_content_type($filePath) ?: 'image/jpeg';
-        $stream = fopen($filePath, 'rb');
-
-        try {
-            $multipartResponse = Http::timeout($timeout)
-                ->connectTimeout($connectTimeout)
-                ->attach('filename', $stream, $fileName, ['Content-Type' => $mime])
-                ->post("{$this->baseUrl}/{$accountId}/adimages", [
-                    'access_token' => $this->accessToken,
-                    'name' => $fileName,
-                ]);
-        } finally {
-            if (is_resource($stream)) {
-                fclose($stream);
-            }
-        }
-
-        if ($multipartResponse->failed()) {
-            $this->handleError($multipartResponse, 'uploadImage');
-        }
-
-        $json = $multipartResponse->json();
-
-        if ($this->extractImageHashFromUploadResponse($json) === null) {
-            throw new Exception('Meta image upload failed: no image hash in response.');
-        }
-
-        return $json;
+        return $response->json();
     }
 
-    /**
-     * Parse image hash from Meta adimages upload response.
-     */
-    public function extractImageHashFromUploadResponse(?array $response): ?string
+    public function getAdImagesByHashes(string $accountId, array $hashes): array
     {
-        if (! is_array($response) || empty($response['images']) || ! is_array($response['images'])) {
-            return null;
+        $hashes = array_values(array_filter(array_unique($hashes)));
+
+        if ($hashes === []) {
+            return [];
         }
 
-        foreach ($response['images'] as $image) {
-            if (is_array($image) && ! empty($image['hash'])) {
-                return (string) $image['hash'];
+        $this->ensureConfigured();
+
+        $accountId = $this->formatAccount($accountId);
+
+        $response = $this->get("{$accountId}/adimages", [
+            'hashes' => json_encode($hashes),
+            'fields' => 'hash,url',
+        ]);
+
+        $map = [];
+
+        foreach ($response['data'] ?? [] as $image) {
+            $hash = $image['hash'] ?? null;
+
+            if (!$hash) {
+                continue;
             }
+
+            $map[$hash] = $image['url'] ?? null;
         }
 
-        return null;
-    }
-
-    protected function validateImageForMetaUpload(string $filePath): void
-    {
-        $info = @getimagesize($filePath);
-
-        if ($info === false) {
-            throw new Exception('Invalid image file. Upload a JPG or PNG.');
-        }
-
-        $width = (int) ($info[0] ?? 0);
-        $height = (int) ($info[1] ?? 0);
-
-        if ($width < 200 || $height < 200) {
-            throw new Exception('Image is too small. Use at least 200×200 pixels.');
-        }
-
-        $size = filesize($filePath);
-
-        if ($size === false || $size > 30 * 1024 * 1024) {
-            throw new Exception('Image exceeds Meta’s 30MB upload limit.');
-        }
+        return $map;
     }
 
     /*
@@ -1715,25 +1627,30 @@ if (!is_array($targeting)) {
     |--------------------------------------------------------------------------
     */
 
-    public function createCreative(string $accountId, array $data): array
+    public function createCreative(string $accountId,array $data):array
     {
+        $this->ensureConfigured();
+
         $accountId = $this->formatAccount($accountId);
 
         if (empty($data['object_story_spec']) || ! is_array($data['object_story_spec'])) {
-            throw new Exception('object_story_spec is required to create a Meta creative.');
+            throw new Exception('object_story_spec is required for Meta creatives.');
+        }
+
+        $objectStorySpec = array_filter($data['object_story_spec']);
+
+        if (empty($objectStorySpec['page_id'])) {
+            throw new Exception('object_story_spec.page_id is required.');
         }
 
         $payload = [
             'name' => $data['name'],
-            'object_story_spec' => json_encode(
-                $data['object_story_spec'],
-                JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
-            ),
+            'object_story_spec' => json_encode($objectStorySpec),
         ];
 
-        Log::info('META_CREATIVE_PAYLOAD', $payload);
+        Log::info('META_CREATIVE_PAYLOAD',$payload);
 
-        return $this->post("{$accountId}/adcreatives", $payload);
+        return $this->post("{$accountId}/adcreatives", $payload, true);
     }
 
   
@@ -1746,6 +1663,8 @@ if (!is_array($targeting)) {
 
 public function createAd(string $accountId, array $data): array
 {
+    $this->ensureConfigured();
+
     $accountId = $this->formatAccount($accountId);
 
     /*
@@ -1762,35 +1681,17 @@ public function createAd(string $accountId, array $data): array
         throw new Exception('adset_id is required');
     }
 
-    if (empty($data['creative']['id']) && empty($data['creative']['spec'])) {
-        throw new Exception('creative id or creative spec is required');
+    if (empty($data['creative']['id'])) {
+        throw new Exception('creative id is required');
     }
 
     /*
     |--------------------------------------------------------------------------
     | BUILD PAYLOAD
     |--------------------------------------------------------------------------
-    | Meta requires the creative field to be JSON encoded.
-    | It can be either:
-    | - {"creative_id":"<ID>"} OR
-    | - {"creative": { ...creative spec... }}
-    |
-    | We support both so we can inline a link creative when Meta rejects an
-    | existing creative_id for LINK_CLICKS optimization (subcode 1815520).
-    |--------------------------------------------------------------------------
+    | Meta requires the creative field to be JSON encoded
+    | and it must contain creative_id
     */
-
-    $creativeParam = null;
-
-    if (! empty($data['creative']['spec']) && is_array($data['creative']['spec'])) {
-        $creativeParam = json_encode([
-            'creative' => $data['creative']['spec'],
-        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-    } else {
-        $creativeParam = json_encode([
-            'creative_id' => (string) $data['creative']['id'],
-        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-    }
 
     $payload = [
 
@@ -1800,12 +1701,10 @@ public function createAd(string $accountId, array $data): array
 
         'status' => $data['status'] ?? 'PAUSED',
 
-        'creative' => $creativeParam,
+        'creative' => json_encode([
+            'creative_id' => $data['creative']['id']
+        ])
     ];
-
-    if (! empty($data['conversion_domain'])) {
-        $payload['conversion_domain'] = (string) $data['conversion_domain'];
-    }
 
     /*
     |--------------------------------------------------------------------------
@@ -1827,7 +1726,7 @@ public function createAd(string $accountId, array $data): array
     |--------------------------------------------------------------------------
     */
 
-    $response = $this->post("{$accountId}/ads", $payload);
+    $response = $this->post("{$accountId}/ads", $payload, true);
 
     /*
     |--------------------------------------------------------------------------
@@ -1896,25 +1795,6 @@ public function getAdSets(string $accountId): array
     ]);
 }
 
-/**
- * Get a single ad set with fields used for validation.
- */
-public function getAdSet(string $adsetId): array
-{
-    return $this->get($adsetId, [
-        'fields' => implode(',', [
-            'id',
-            'name',
-            'status',
-            'optimization_goal',
-            'billing_event',
-            'promoted_object',
-            'targeting',
-            'destination_type',
-        ]),
-    ]);
-}
-
 
 /*
 |--------------------------------------------------------------------------
@@ -1955,17 +1835,7 @@ public function getAds(?string $accountId = null): array
 public function getAd(string $adId): array
 {
     return $this->get($adId, [
-        'fields' => 'id,name,status,effective_status,adset_id,campaign_id',
-    ]);
-}
-
-/**
- * Fetch ad with creative object_story_spec (for IG delivery verification).
- */
-public function getAdWithCreativeSpec(string $adId): array
-{
-    return $this->get($adId, [
-        'fields' => 'id,name,status,effective_status,adset_id,creative{id,name,object_story_spec}',
+        'fields' => 'id,name,status,effective_status,adset_id,campaign_id'
     ]);
 }
 /*
@@ -1973,22 +1843,7 @@ public function getAdWithCreativeSpec(string $adId): array
 | GET INSIGHTS
 |--------------------------------------------------------------------------
 */
-/**
- * Lightweight platform breakdown (avoids heavy insight fields + timeouts).
- *
- * @return list<array<string, mixed>>
- */
-public function getAdPlatformBreakdown(string $adId, string $preset = 'today'): array
-{
-    return $this->collectPagedData("{$adId}/insights", [
-        'fields' => 'impressions,clicks,spend',
-        'date_preset' => $preset,
-        'breakdowns' => 'publisher_platform',
-        'limit' => 25,
-    ]);
-}
-
-public function getInsights(string $objectId, string $preset = 'maximum', array $extra = []): array
+public function getInsights(string $objectId, string $preset = 'lifetime', array $extra = []): array
 {
     /*
     |--------------------------------------------------------------------------
@@ -2031,30 +1886,32 @@ public function getInsights(string $objectId, string $preset = 'maximum', array 
     $params = array_merge([
         'fields' => $fields,
         'date_preset' => $preset,
-        'limit' => 1,
+        'limit' => 1
     ], $extra);
-
-    if (isset($extra['breakdowns'])) {
-        $params['limit'] = 100;
-    }
 
     Log::info('META_INSIGHTS_REQUEST', [
         'object_id' => $objectId,
         'preset' => $preset,
-        'params' => $params,
+        'params' => $params
     ]);
 
     /*
     |--------------------------------------------------------------------------
-    | If breakdown requested → return all platform rows (paginated)
+    | Call Meta API
+    |--------------------------------------------------------------------------
+    */
+
+    $response = $this->get("{$objectId}/insights", $params);
+
+    /*
+    |--------------------------------------------------------------------------
+    | If breakdown requested → return raw rows (for audience/device tables)
     |--------------------------------------------------------------------------
     */
 
     if (isset($extra['breakdowns'])) {
-        return $this->collectPagedData("{$objectId}/insights", $params);
+        return $response['data'] ?? [];
     }
-
-    $response = $this->get("{$objectId}/insights", $params);
 
     /*
     |--------------------------------------------------------------------------
@@ -2131,6 +1988,27 @@ public function getCampaign(string $campaignId): array
         'fields' => 'id,name,status,objective'
     ]);
 }
+/**
+ * Get a single ad set with fields used for validation.
+ */
+public function getAdSet(string $adsetId): array
+{
+    $this->ensureConfigured();
+
+    return $this->get($adsetId, [
+        'fields' => implode(',', [
+            'id',
+            'name',
+            'status',
+            'optimization_goal',
+            'billing_event',
+            'promoted_object',
+            'targeting',
+            'destination_type',
+        ]),
+    ]);
+}
+
 /*
 |--------------------------------------------------------------------------
 | UPDATE ADSET
@@ -2139,28 +2017,6 @@ public function getCampaign(string $campaignId): array
 
 public function updateAdSet(string $adsetId, array $data): array
 {
-    if (isset($data['targeting'])) {
-        $targeting = $data['targeting'];
-
-        if (is_string($targeting)) {
-            $decoded = json_decode($targeting, true);
-
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                throw new Exception('Invalid targeting JSON');
-            }
-
-            $targeting = $decoded;
-        }
-
-        if (! is_array($targeting)) {
-            throw new Exception('Invalid targeting structure');
-        }
-
-        $targeting = $this->buildTargeting($targeting);
-        $targeting = $this->applyFacebookInstagramPlacements($targeting);
-        $data['targeting'] = json_encode($targeting);
-    }
-
     Log::info('META_ADSET_UPDATE',[
         'adset_id'=>$adsetId,
         'payload'=>$data
@@ -2176,6 +2032,8 @@ public function updateAdSet(string $adsetId, array $data): array
 
 protected function getAccessToken(): string
 {
+    $this->ensureConfigured();
+
     return $this->accessToken;
 }
 public function updateCreative(string $creativeId,array $data):array
@@ -2191,21 +2049,28 @@ public function getCreativeInsights(string $creativeId): array
 }
 public function getBillingInfo(string $accountId)
 {
+    $this->ensureConfigured();
+
     $accountId = $this->formatAccount($accountId);
 
-    $response = Http::get("{$this->baseUrl}/{$accountId}",[
-        'fields' => implode(',',[
-            'id',
-            'name',
-            'account_status',
-            'currency',
-            'timezone_name',
-            'amount_spent',
-            'spend_cap',
-            'funding_source_details'
-        ]),
-        'access_token' => $this->accessToken
-    ]);
+    $timeout = (int) config('services.meta.http_timeout', 90);
+    $connectTimeout = (int) config('services.meta.http_connect_timeout', 45);
+
+    $response = Http::timeout($timeout)
+        ->connectTimeout($connectTimeout)
+        ->get("{$this->baseUrl}/{$accountId}", [
+            'fields' => implode(',', [
+                'id',
+                'name',
+                'account_status',
+                'currency',
+                'timezone_name',
+                'amount_spent',
+                'spend_cap',
+                'funding_source_details',
+            ]),
+            'access_token' => $this->accessToken,
+        ]);
 
     if(!$response->successful()){
         $this->handleError($response,'billing_info');
@@ -2220,25 +2085,9 @@ public function getBillingInfo(string $accountId)
 | Fetch all ads insights in ONE request (avoids rate limit)
 */
 
-public function getInsightsBatch(string $accountId, string $datePreset = 'today'): array
+public function getInsightsBatch(string $accountId): array
 {
-    $accountId = $this->formatAccount($accountId);
-
-    return $this->get("{$accountId}/insights", [
-
-        'level' => 'ad',
-
-        'fields' => implode(',', [
-            'ad_id',
-            'impressions',
-            'clicks',
-            'spend'
-        ]),
-
-        'date_preset' => $datePreset,
-
-        'limit' => 500
-    ]);
+    return $this->getAdInsightsMap($accountId, 'today');
 }
 
 /**
@@ -2248,9 +2097,11 @@ public function getInsightsBatch(string $accountId, string $datePreset = 'today'
  */
 public function getAdInsightsMap(?string $accountId = null, string $preset = 'maximum'): array
 {
-    $accountId = $this->formatAccount($accountId ?? config('services.meta.ad_account_id'));
+    $this->ensureConfigured();
 
-    $rows = $this->collectPagedData("{$accountId}/insights", [
+    $accountId = $this->formatAccount($accountId ?? $this->defaultAccount);
+
+    $response = $this->get("{$accountId}/insights", [
         'level' => 'ad',
         'fields' => implode(',', [
             'ad_id',
@@ -2265,7 +2116,7 @@ public function getAdInsightsMap(?string $accountId = null, string $preset = 'ma
 
     $map = [];
 
-    foreach ($rows as $row) {
+    foreach ($response['data'] ?? [] as $row) {
         $adId = (string) ($row['ad_id'] ?? '');
 
         if ($adId !== '') {
@@ -2277,30 +2128,17 @@ public function getAdInsightsMap(?string $accountId = null, string $preset = 'ma
 }
 
 /**
- * All ads in the ad account (paginated).
- *
- * @return list<array<string, mixed>>
- */
-public function listAccountAds(?string $accountId = null): array
-{
-    $accountId = $this->formatAccount($accountId ?? config('services.meta.ad_account_id'));
-
-    return $this->collectPagedData("{$accountId}/ads", [
-        'fields' => 'id,name,status,effective_status,adset_id',
-        'limit' => 500,
-    ]);
-}
-
-/**
  * Ad-level insights split by publisher_platform (facebook, instagram, …).
  *
  * @return array<string, array<string, array{impressions: int, clicks: int, spend: float}>>
  */
 public function getAdPlacementInsightsMap(?string $accountId = null, string $preset = 'maximum'): array
 {
-    $accountId = $this->formatAccount($accountId ?? config('services.meta.ad_account_id'));
+    $this->ensureConfigured();
 
-    $rows = $this->collectPagedData("{$accountId}/insights", [
+    $accountId = $this->formatAccount($accountId ?? $this->defaultAccount);
+
+    $response = $this->get("{$accountId}/insights", [
         'level' => 'ad',
         'breakdowns' => 'publisher_platform',
         'fields' => implode(',', ['ad_id', 'impressions', 'clicks', 'spend']),
@@ -2310,7 +2148,7 @@ public function getAdPlacementInsightsMap(?string $accountId = null, string $pre
 
     $map = [];
 
-    foreach ($rows as $row) {
+    foreach ($response['data'] ?? [] as $row) {
         $adId = (string) ($row['ad_id'] ?? '');
         $platform = strtolower((string) ($row['publisher_platform'] ?? 'unknown'));
 
@@ -2334,14 +2172,21 @@ public function getAdPlacementInsightsMap(?string $accountId = null, string $pre
 
 public function getAccountStatus($accountId)
 {
+    $this->ensureConfigured();
+
     $accountId = str_starts_with($accountId, 'act_')
         ? $accountId
         : "act_{$accountId}";
 
-    $response = Http::get("{$this->baseUrl}/{$accountId}", [
-        'fields' => 'account_status',
-        'access_token' => $this->accessToken
-    ]);
+    $timeout = (int) config('services.meta.http_timeout', 90);
+    $connectTimeout = (int) config('services.meta.http_connect_timeout', 45);
+
+    $response = Http::timeout($timeout)
+        ->connectTimeout($connectTimeout)
+        ->get("{$this->baseUrl}/{$accountId}", [
+            'fields' => 'account_status',
+            'access_token' => $this->accessToken,
+        ]);
 
     if (!$response->successful()) {
         throw new \Exception($response->body());
@@ -2349,4 +2194,84 @@ public function getAccountStatus($accountId)
 
     return $response->json();
 }
+
+    /*
+    |--------------------------------------------------------------------------
+    | CLICK-TO-WHATSAPP MARKETING
+    |--------------------------------------------------------------------------
+    */
+
+    public function createWhatsAppCampaign(string $accountId, array $data): array
+    {
+        $data['objective'] = $data['objective'] ?? 'OUTCOME_ENGAGEMENT';
+
+        return $this->createCampaign($accountId, $data);
+    }
+
+    public function createWhatsAppAdSet(string $accountId, array $data): array
+    {
+        $data['optimization_goal'] = $data['optimization_goal'] ?? 'CONVERSATIONS';
+        $data['billing_event'] = $data['billing_event'] ?? 'IMPRESSIONS';
+        $data['destination_type'] = $data['destination_type'] ?? 'WHATSAPP';
+
+        if (empty($data['promoted_object']) && ! empty($data['page_id'])) {
+            $data['promoted_object'] = ['page_id' => $data['page_id']];
+        }
+
+        return $this->createAdSet($accountId, $data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload  Must include object_story_spec from ClickToWhatsAppCreativeBuilder
+     */
+    public function createClickToWhatsAppCreative(string $accountId, array $payload): array
+    {
+        return $this->createCreative($accountId, $payload);
+    }
+
+    /**
+     * Pull insights with messaging metrics when available.
+     */
+    public function getMarketingInsights(string $objectId, string $level = 'campaign', string $preset = 'maximum'): array
+    {
+        $fields = [
+            'impressions',
+            'reach',
+            'clicks',
+            'spend',
+            'ctr',
+            'cpc',
+            'actions',
+            'cost_per_action_type',
+        ];
+
+        return $this->getInsights($objectId, [
+            'level' => $level,
+            'fields' => implode(',', $fields),
+            'date_preset' => $preset,
+        ]);
+    }
+
+    public function humanizeMetaError(Throwable $e): string
+    {
+        $message = $e->getMessage();
+
+        return match (true) {
+            str_contains($message, 'permission') || str_contains($message, 'OAuthException') =>
+                'Permission missing — reconnect Meta and grant ads_management, pages_manage_ads, and WhatsApp permissions.',
+            str_contains($message, 'access token') || str_contains($message, '190') =>
+                'Invalid or expired token — reconnect Meta in Admin → Meta Connection.',
+            str_contains($message, 'ad account') && str_contains($message, 'disabled') =>
+                'Ad account disabled or restricted — check Meta Business Manager account status.',
+            str_contains($message, 'WhatsApp') || str_contains($message, 'whatsapp') =>
+                'WhatsApp number not connected to Page — link WhatsApp in Meta Business Suite.',
+            str_contains($message, 'placement') =>
+                'Placement unsupported for Click-to-WhatsApp — use Facebook/Instagram feed, stories, or reels.',
+            str_contains($message, 'budget') || str_contains($message, '2446') =>
+                'Budget too low — increase daily budget (minimum varies by currency).',
+            str_contains($message, 'creative') || str_contains($message, '1487') =>
+                'Creative invalid — check image size, text length, and WhatsApp CTA configuration.',
+            default => $message,
+        };
+    }
 }

@@ -60,10 +60,12 @@ protected $fillable = [
     'creative_id',
 
     'meta_ad_id',
-    'previous_meta_ad_ids',
 
     'name',
     'status',
+    'meta_effective_status',
+    'meta_review_feedback',
+    'meta_created_time',
 
     /* Budget control */
     'daily_budget',
@@ -71,7 +73,6 @@ protected $fillable = [
     'daily_spend_anchor',
     'pause_reason',
     'spend_date',
-    'instagram_enabled_at',
 
     /* Metrics */
     'impressions',
@@ -93,26 +94,27 @@ protected $fillable = [
         'impressions' => 0,
         'clicks' => 0,
         'spend' => 0,
-        'ctr' => 0,
+        'ctr' => 0
     ];
+
 
     /*
     |--------------------------------------------------------------------------
     | Casts
     |--------------------------------------------------------------------------
     */
-    protected $casts = [
-        'previous_meta_ad_ids' => 'array',
-        'instagram_enabled_at' => 'datetime',
-        'daily_budget' => 'float',
-        'daily_spend' => 'float',
-        'daily_spend_anchor' => 'float',
-        'spend_date' => 'date',
-        'impressions' => 'integer',
-        'clicks' => 'integer',
-        'spend' => 'float',
-        'ctr' => 'float',
-    ];
+protected $casts = [
+
+    'daily_budget' => 'float',
+    'daily_spend' => 'float',
+    'daily_spend_anchor' => 'float',
+    'spend_date' => 'date',
+
+    'impressions' => 'integer',
+    'clicks' => 'integer',
+    'spend' => 'float',
+    'ctr' => 'float'
+];
 
 
     /*
@@ -265,63 +267,25 @@ protected $fillable = [
         return !empty($this->meta_ad_id);
     }
 
-    /**
-     * Current + legacy Meta ad ids (IG reprovision keeps spend on old ids).
-     *
-     * @return list<string>
-     */
-    public function metaIdsForMetrics(): array
-    {
-        $ids = [];
-
-        if (! empty($this->meta_ad_id)) {
-            $ids[] = (string) $this->meta_ad_id;
-        }
-
-        foreach (is_array($this->previous_meta_ad_ids) ? $this->previous_meta_ad_ids : [] as $legacyId) {
-            $legacyId = (string) $legacyId;
-
-            if ($legacyId !== '' && ! in_array($legacyId, $ids, true)) {
-                $ids[] = $legacyId;
-            }
-        }
-
-        return $ids;
-    }
-
     public function hasReachedDailyBudget(): bool
     {
-        if ((float) $this->daily_budget <= 0) {
-            return false;
-        }
-
         if ($this->pause_reason === 'budget_limit' && $this->status === self::STATUS_PAUSED) {
             return false;
         }
 
-        return (float) $this->daily_spend >= (float) $this->daily_budget - 0.001;
+        return (float) $this->daily_budget > 0
+            && (float) $this->daily_spend >= (float) $this->daily_budget;
     }
 
     public function displayDailySpend(): float
     {
-        $budget = (float) ($this->daily_budget ?? 0);
-
-        if ($this->status === self::STATUS_PAUSED) {
-            if (in_array($this->pause_reason, ['budget_limit', 'budget'], true) && $budget > 0) {
-                return $budget;
-            }
-
+        if ($this->pause_reason === 'budget_limit' && $this->status === self::STATUS_PAUSED) {
             return 0;
         }
 
-        $spent = (float) ($this->daily_spend ?? 0);
-
-        if ($budget > 0) {
-            return min($spent, $budget);
-        }
-
-        return $spent;
+        return (float) ($this->daily_spend ?? 0);
     }
+
 
     /**
      * Link to Meta Ads Manager
