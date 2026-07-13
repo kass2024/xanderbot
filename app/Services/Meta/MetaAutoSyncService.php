@@ -7,6 +7,7 @@ use App\Services\Platform\PlatformBootstrapService;
 use App\Services\Tenant\TenantConnectionResolver;
 use App\Support\SafeCache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 /**
@@ -333,13 +334,33 @@ class MetaAutoSyncService
 
         $chosen = $chosen ?: $phones[0];
 
-        $connection->forceFill(array_filter([
-            'linked_whatsapp_phone_directory' => $phones,
+        $updates = array_filter([
             'whatsapp_phone_number_id' => (string) ($chosen['id'] ?? ''),
             'whatsapp_phone_number' => $chosen['display_phone_number'] ?? null,
             'whatsapp_business_id' => $chosen['waba_id'] ?? $connection->whatsapp_business_id,
-        ], fn ($v) => $v !== null && $v !== ''))->saveQuietly();
+        ], fn ($v) => $v !== null && $v !== '');
+
+        if ($this->hasPhoneDirectoryColumn()) {
+            $updates['linked_whatsapp_phone_directory'] = $phones;
+        }
+
+        $connection->forceFill($updates)->saveQuietly();
 
         return count($phones);
+    }
+
+    protected function hasPhoneDirectoryColumn(): bool
+    {
+        static $hasColumn = null;
+
+        if ($hasColumn === null) {
+            try {
+                $hasColumn = Schema::hasColumn('platform_meta_connections', 'linked_whatsapp_phone_directory');
+            } catch (Throwable) {
+                $hasColumn = false;
+            }
+        }
+
+        return $hasColumn;
     }
 }

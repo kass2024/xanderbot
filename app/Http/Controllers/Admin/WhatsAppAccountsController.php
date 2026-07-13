@@ -185,7 +185,13 @@ class WhatsAppAccountsController extends Controller
                         }
                     }
                     SafeCache::put('meta_wa_phone_directory_'.$cacheSuffix, $allPhones, now()->addMinutes(30));
-                    if ($connection) {
+                    if (
+                        $connection
+                        && \Illuminate\Support\Facades\Schema::hasColumn(
+                            'platform_meta_connections',
+                            'linked_whatsapp_phone_directory'
+                        )
+                    ) {
                         $connection->forceFill([
                             'linked_whatsapp_phone_directory' => $allPhones,
                         ])->saveQuietly();

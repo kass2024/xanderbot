@@ -32,6 +32,9 @@ fi
 php artisan storage:fix-permissions || true
 php artisan cache:clear || true
 php artisan optimize:clear || true
+
+# Migrate before meta:auto-sync — phone directory column must exist first
+php artisan migrate --force || true
 php artisan meta:auto-sync --force || true
 
 echo "Done. WhatsApp Sync now / cron meta:auto-sync should work without permission errors."
