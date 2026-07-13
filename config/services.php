@@ -51,6 +51,8 @@ return [
         'page_name' => env('META_PAGE_NAME', 'Xander Global Scholars'),
         /** Instagram business account ID if Page lookup fails. */
         'instagram_user_id' => env('META_INSTAGRAM_USER_ID'),
+        /** Instagram username/handle when Graph omits it (system-user tokens often do). */
+        'instagram_username' => env('META_INSTAGRAM_USERNAME'),
 
         /*
         |--------------------------------------------------------------------------
