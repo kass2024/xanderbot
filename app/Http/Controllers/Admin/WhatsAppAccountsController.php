@@ -5,10 +5,10 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Services\Meta\MetaAutoSyncService;
 use App\Services\Meta\WhatsAppBusinessAccountService;
+use App\Support\SafeCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\View\View;
 use Illuminate\Validation\ValidationException;
 
@@ -32,7 +32,7 @@ class WhatsAppAccountsController extends Controller
         $accounts = [];
         $fromCache = false;
 
-        $cached = Cache::get($wabaCacheKey);
+        $cached = SafeCache::get($wabaCacheKey);
         if (is_array($cached) && $cached !== []) {
             $accounts = $cached;
             $fromCache = true;
@@ -40,7 +40,7 @@ class WhatsAppAccountsController extends Controller
             $accounts = $this->seedWabasFromConnection($connection);
         }
 
-        $syncedAt = Cache::get($syncedAtKey);
+        $syncedAt = SafeCache::get($syncedAtKey);
         $stale = ! $syncedAt || $syncedAt === 'cached' || $accounts === [];
         if (! $stale) {
             try {
@@ -51,7 +51,7 @@ class WhatsAppAccountsController extends Controller
         }
         if ($stale) {
             $lockKey = 'meta_wa_bg_sync_'.$cacheSuffix;
-            if (Cache::add($lockKey, 1, now()->addMinutes(2))) {
+            if (SafeCache::add($lockKey, 1, now()->addMinutes(2))) {
                 dispatch(function () use ($cacheSuffix, $lockKey, $wabaCacheKey, $syncedAtKey) {
                     try {
                         app(MetaAutoSyncService::class)->sync(false);
@@ -60,24 +60,24 @@ class WhatsAppAccountsController extends Controller
                         $wa->resolveBusinessManagerId($connection);
                         $result = $wa->syncToConnection($connection);
                         $accounts = $result['accounts'] ?? [];
-                        $prev = Cache::get($wabaCacheKey);
+                        $prev = SafeCache::get($wabaCacheKey);
                         if (
                             is_array($prev)
                             && count($prev) > count($accounts)
                             && ! empty($result['incomplete'])
                         ) {
-                            Cache::put($syncedAtKey, now()->toDateTimeString(), now()->addMinutes(30));
+                            SafeCache::put($syncedAtKey, now()->toDateTimeString(), now()->addMinutes(30));
 
                             return;
                         }
                         if ($accounts !== [] || ! is_array($prev) || $prev === []) {
-                            Cache::put($wabaCacheKey, $accounts, now()->addMinutes(30));
+                            SafeCache::put($wabaCacheKey, $accounts, now()->addMinutes(30));
                         }
-                        Cache::put($syncedAtKey, now()->toDateTimeString(), now()->addMinutes(30));
+                        SafeCache::put($syncedAtKey, now()->toDateTimeString(), now()->addMinutes(30));
                     } catch (\Throwable $e) {
                         \Illuminate\Support\Facades\Log::warning('WA_BACKGROUND_SYNC_FAILED', ['error' => $e->getMessage()]);
                     } finally {
-                        Cache::forget($lockKey);
+                        SafeCache::forget($lockKey);
                     }
                 })->afterResponse();
             }
@@ -92,7 +92,12 @@ class WhatsAppAccountsController extends Controller
         $phones = [];
 
         if ($selectedId !== '') {
-            $cachedPhones = Cache::get($phoneCacheKey);
+            $cachedPhones = SafeCache::get($phoneCacheKey);
+            if (! is_array($cachedPhones) || $cachedPhones === []) {
+                $cachedPhones = is_array($connection?->linked_whatsapp_phone_directory)
+                    ? $connection->linked_whatsapp_phone_directory
+                    : [];
+            }
             if (is_array($cachedPhones)) {
                 $phones = array_values(array_filter($cachedPhones, function ($p) use ($selectedId) {
                     return is_array($p) && (string) ($p['waba_id'] ?? '') === $selectedId;
@@ -116,7 +121,7 @@ class WhatsAppAccountsController extends Controller
             'search' => $search,
             'error' => $error,
             'pendingPhoneId' => old('phone_number_id', session('pending_phone_number_id')),
-            'lastSyncedAt' => Cache::get($syncedAtKey) ?: ($fromCache ? 'cached' : null),
+            'lastSyncedAt' => SafeCache::get($syncedAtKey) ?: ($fromCache ? 'cached' : null),
             'needsSync' => ! $fromCache && $accounts === [],
         ]);
     }
@@ -131,6 +136,8 @@ class WhatsAppAccountsController extends Controller
         $cacheSuffix = (string) ($connection?->id ?? 'platform');
 
         try {
+            @\Illuminate\Support\Facades\Artisan::call('storage:fix-permissions');
+
             $this->autoSync->syncAlways();
             $connection = $this->whatsapp->connection();
             $this->whatsapp->resolveBusinessManagerId($connection);
@@ -139,7 +146,7 @@ class WhatsAppAccountsController extends Controller
             $incomplete = ! empty($result['incomplete']);
 
             $cacheKey = 'meta_waba_directory_'.$cacheSuffix;
-            $prev = Cache::get($cacheKey);
+            $prev = SafeCache::get($cacheKey);
             if (
                 is_array($prev)
                 && count($prev) > count($accounts)
@@ -147,9 +154,9 @@ class WhatsAppAccountsController extends Controller
             ) {
                 $accounts = $prev;
             } else {
-                Cache::put($cacheKey, $accounts, now()->addMinutes(30));
+                SafeCache::put($cacheKey, $accounts, now()->addMinutes(30));
             }
-            Cache::put('meta_bm_synced_at_'.$cacheSuffix, now()->toDateTimeString(), now()->addMinutes(30));
+            SafeCache::put('meta_bm_synced_at_'.$cacheSuffix, now()->toDateTimeString(), now()->addMinutes(30));
 
             $selectedId = $waba !== '' ? $waba : (string) ($connection?->whatsapp_business_id ?? ($accounts[0]['id'] ?? ''));
             if ($selectedId !== '') {
@@ -163,8 +170,13 @@ class WhatsAppAccountsController extends Controller
                             'waba_name' => $detail['name'] ?? null,
                         ]);
                     }
-                    // Also keep other WABA phones from previous cache when possible
-                    $prevPhones = Cache::get('meta_wa_phone_directory_'.$cacheSuffix);
+                    // Also keep other WABA phones from previous cache / DB when possible
+                    $prevPhones = SafeCache::get('meta_wa_phone_directory_'.$cacheSuffix);
+                    if (! is_array($prevPhones) || $prevPhones === []) {
+                        $prevPhones = is_array($connection?->linked_whatsapp_phone_directory)
+                            ? $connection->linked_whatsapp_phone_directory
+                            : [];
+                    }
                     if (is_array($prevPhones)) {
                         foreach ($prevPhones as $p) {
                             if (is_array($p) && (string) ($p['waba_id'] ?? '') !== $selectedId) {
@@ -172,9 +184,14 @@ class WhatsAppAccountsController extends Controller
                             }
                         }
                     }
-                    Cache::put('meta_wa_phone_directory_'.$cacheSuffix, $allPhones, now()->addMinutes(30));
+                    SafeCache::put('meta_wa_phone_directory_'.$cacheSuffix, $allPhones, now()->addMinutes(30));
+                    if ($connection) {
+                        $connection->forceFill([
+                            'linked_whatsapp_phone_directory' => $allPhones,
+                        ])->saveQuietly();
+                    }
                 } catch (\Throwable) {
-                    // list still cached
+                    // list still cached / DB
                 }
             }
 
@@ -194,6 +211,17 @@ class WhatsAppAccountsController extends Controller
                 ->route('admin.meta.whatsapp.index')
                 ->with('error', collect($e->errors())->flatten()->first());
         } catch (\Throwable $e) {
+            if (SafeCache::isPermissionError($e)) {
+                @\Illuminate\Support\Facades\Artisan::call('storage:fix-permissions');
+
+                return redirect()
+                    ->route('admin.meta.whatsapp.index', array_filter([
+                        'waba' => $waba ?: null,
+                        'tab' => 'phones',
+                    ]))
+                    ->with('success', 'WhatsApp numbers refresh ran. File cache permissions were repaired — reload if the list looks stale.');
+            }
+
             return redirect()
                 ->route('admin.meta.whatsapp.index')
                 ->with('error', $e->getMessage());

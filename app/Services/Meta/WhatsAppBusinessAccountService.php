@@ -5,7 +5,7 @@ namespace App\Services\Meta;
 use App\Models\PlatformMetaConnection;
 use App\Services\Tenant\TenantConnectionResolver;
 use App\Services\Tenant\TenantMetaPageValidator;
-use Illuminate\Support\Facades\Cache;
+use App\Support\SafeCache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
@@ -168,7 +168,7 @@ class WhatsAppBusinessAccountService
             ]);
             $joined = strtolower(implode(' ', $errors));
             if (str_contains($joined, 'too many') || str_contains($joined, 'rate') || str_contains($joined, 'limit')) {
-                Cache::put('meta_wa_rate_limited', 1, now()->addMinutes(10));
+                SafeCache::put('meta_wa_rate_limited', 1, now()->addMinutes(10));
             }
         } elseif ($errors !== []) {
             Log::info('WA_LIST_WABAS_PARTIAL_OK', [
@@ -177,9 +177,9 @@ class WhatsAppBusinessAccountService
                 'from_graph' => $fromGraphCount,
                 'errors' => $errors,
             ]);
-            Cache::forget('meta_wa_rate_limited');
+            SafeCache::forget('meta_wa_rate_limited');
         } else {
-            Cache::forget('meta_wa_rate_limited');
+            SafeCache::forget('meta_wa_rate_limited');
         }
 
         return [

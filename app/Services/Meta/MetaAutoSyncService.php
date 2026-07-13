@@ -5,7 +5,7 @@ namespace App\Services\Meta;
 use App\Models\PlatformMetaConnection;
 use App\Services\Platform\PlatformBootstrapService;
 use App\Services\Tenant\TenantConnectionResolver;
-use Illuminate\Support\Facades\Cache;
+use App\Support\SafeCache;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -39,7 +39,7 @@ class MetaAutoSyncService
     {
         $ttl = max(30, (int) config('platform.meta_auto_sync_ttl', 120));
 
-        if (! $force && Cache::has(self::CACHE_KEY)) {
+        if (! $force && SafeCache::has(self::CACHE_KEY)) {
             return [
                 'synced' => false,
                 'skipped' => true,
@@ -65,7 +65,7 @@ class MetaAutoSyncService
             }
 
             if (! $connection) {
-                Cache::put(self::CACHE_KEY, now()->timestamp, $ttl);
+                SafeCache::put(self::CACHE_KEY, now()->timestamp, $ttl);
 
                 return [
                     'synced' => false,
@@ -107,7 +107,7 @@ class MetaAutoSyncService
             $this->cacheWabaDirectory($connection);
             $connection = $connection->fresh();
 
-            Cache::put(self::CACHE_KEY, now()->timestamp, $ttl);
+            SafeCache::put(self::CACHE_KEY, now()->timestamp, $ttl);
 
             Log::info('META_AUTO_SYNC_OK', [
                 'connection_id' => $connection?->id,
@@ -127,9 +127,11 @@ class MetaAutoSyncService
                 'error' => null,
             ];
         } catch (Throwable $e) {
-            $error = $e->getMessage();
-            Log::warning('META_AUTO_SYNC_FAILED', ['error' => $error]);
-            Cache::put(self::CACHE_KEY, now()->timestamp, min(60, $ttl));
+            $error = SafeCache::isPermissionError($e)
+                ? 'Server storage cache is not writable. Numbers still sync on cron once permissions are fixed (run: php artisan storage:fix-permissions).'
+                : $e->getMessage();
+            Log::warning('META_AUTO_SYNC_FAILED', ['error' => $e->getMessage()]);
+            SafeCache::put(self::CACHE_KEY, now()->timestamp, min(60, $ttl));
 
             return [
                 'synced' => false,
@@ -147,19 +149,19 @@ class MetaAutoSyncService
      */
     public function syncAlways(): array
     {
-        Cache::forget(self::CACHE_KEY);
+        SafeCache::forget(self::CACHE_KEY);
         $connection = $this->resolver->forCurrentUser()
             ?? PlatformMetaConnection::query()->platformDefault()->active()->first();
         if ($connection) {
-            Cache::forget('meta_wa_phone_directory_'.$connection->id);
-            Cache::forget('meta_ig_directory_'.$connection->id);
-            Cache::forget('meta_waba_directory_'.$connection->id);
-            Cache::forget('meta_bm_synced_at_'.$connection->id);
-            Cache::forget('meta_ig_synced_at_'.$connection->id);
+            SafeCache::forget('meta_wa_phone_directory_'.$connection->id);
+            SafeCache::forget('meta_ig_directory_'.$connection->id);
+            SafeCache::forget('meta_waba_directory_'.$connection->id);
+            SafeCache::forget('meta_bm_synced_at_'.$connection->id);
+            SafeCache::forget('meta_ig_synced_at_'.$connection->id);
         }
-        Cache::forget('meta_wa_phone_directory_platform');
-        Cache::forget('meta_ig_directory_platform');
-        Cache::forget('meta_waba_directory_platform');
+        SafeCache::forget('meta_wa_phone_directory_platform');
+        SafeCache::forget('meta_ig_directory_platform');
+        SafeCache::forget('meta_waba_directory_platform');
 
         return $this->sync(true);
     }
@@ -172,12 +174,12 @@ class MetaAutoSyncService
         try {
             $result = $this->instagram->syncToConnection($connection);
             $accounts = $result['accounts'] ?? [];
-            Cache::put(
+            SafeCache::put(
                 'meta_ig_directory_'.($connection->id ?? 'platform'),
                 $accounts,
                 now()->addMinutes(30)
             );
-            Cache::put(
+            SafeCache::put(
                 'meta_ig_synced_at_'.($connection->id ?? 'platform'),
                 now()->toDateTimeString(),
                 now()->addMinutes(30)
@@ -197,7 +199,7 @@ class MetaAutoSyncService
             $result = $this->whatsapp->syncToConnection($connection);
             $accounts = $result['accounts'] ?? [];
             $key = 'meta_waba_directory_'.($connection->id ?? 'platform');
-            $prev = Cache::get($key);
+            $prev = SafeCache::get($key);
 
             // Rate-limit / Graph errors must not shrink a previously good directory to 1 env WABA
             if (
@@ -209,7 +211,7 @@ class MetaAutoSyncService
                     'prev' => count($prev),
                     'new' => count($accounts),
                 ]);
-                Cache::put(
+                SafeCache::put(
                     'meta_bm_synced_at_'.($connection->id ?? 'platform'),
                     now()->toDateTimeString(),
                     now()->addMinutes(30)
@@ -222,8 +224,8 @@ class MetaAutoSyncService
                 return;
             }
 
-            Cache::put($key, $accounts, now()->addMinutes(30));
-            Cache::put(
+            SafeCache::put($key, $accounts, now()->addMinutes(30));
+            SafeCache::put(
                 'meta_bm_synced_at_'.($connection->id ?? 'platform'),
                 now()->toDateTimeString(),
                 now()->addMinutes(30)
@@ -241,8 +243,9 @@ class MetaAutoSyncService
         $phones = [];
 
         // Back off while Meta is rate-limiting WhatsApp Graph calls
-        if (Cache::get('meta_wa_rate_limited')) {
-            $cached = Cache::get('meta_wa_phone_directory_'.($connection->id ?? 'platform'));
+        if (SafeCache::get('meta_wa_rate_limited')) {
+            $cached = SafeCache::get('meta_wa_phone_directory_'.($connection->id ?? 'platform'))
+                ?: ($connection->linked_whatsapp_phone_directory ?? []);
 
             return is_array($cached) ? count($cached) : 0;
         }
@@ -275,7 +278,7 @@ class MetaAutoSyncService
         }
 
         $phoneKey = 'meta_wa_phone_directory_'.($connection->id ?? 'platform');
-        $prevPhones = Cache::get($phoneKey);
+        $prevPhones = SafeCache::get($phoneKey) ?: ($connection->linked_whatsapp_phone_directory ?? null);
         // Don't replace a full multi-WABA phone list with a rate-limited partial pull
         if (is_array($prevPhones) && count($prevPhones) > count($phones) && count($phones) <= 2) {
             Log::warning('META_AUTO_SYNC_PHONES_PRESERVED', [
@@ -286,10 +289,15 @@ class MetaAutoSyncService
             return count($prevPhones);
         }
 
-        // Cache full phone list for Ad Studio dropdown (survives brief Graph blips)
-        Cache::put(
+        // Cache + DB so Ad Studio / BM keep numbers even if file cache is not writable
+        SafeCache::put(
             $phoneKey,
             $phones,
+            now()->addMinutes(30)
+        );
+        SafeCache::put(
+            'meta_bm_synced_at_'.($connection->id ?? 'platform'),
+            now()->toDateTimeString(),
             now()->addMinutes(30)
         );
 
@@ -326,10 +334,11 @@ class MetaAutoSyncService
         $chosen = $chosen ?: $phones[0];
 
         $connection->forceFill(array_filter([
+            'linked_whatsapp_phone_directory' => $phones,
             'whatsapp_phone_number_id' => (string) ($chosen['id'] ?? ''),
             'whatsapp_phone_number' => $chosen['display_phone_number'] ?? null,
             'whatsapp_business_id' => $chosen['waba_id'] ?? $connection->whatsapp_business_id,
-        ]))->saveQuietly();
+        ], fn ($v) => $v !== null && $v !== ''))->saveQuietly();
 
         return count($phones);
     }

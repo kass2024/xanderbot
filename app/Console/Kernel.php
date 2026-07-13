@@ -10,7 +10,14 @@ class Kernel extends ConsoleKernel
 {
     protected function schedule(Schedule $schedule): void
     {
+        // Keep storage/cache writable so Meta + WhatsApp sync never blow up with Permission denied
+        $schedule->command('storage:fix-permissions')
+            ->hourly()
+            ->withoutOverlapping()
+            ->name('storage-fix-permissions')
+            ->appendOutputTo(storage_path('logs/storage-permissions.log'));
 
+        // Auto-sync WhatsApp phone numbers (+ WABA / IG) from Meta every 5 minutes
         $schedule->command('meta:auto-sync --force')
             ->everyFiveMinutes()
             ->withoutOverlapping()

@@ -45,6 +45,11 @@ class SafeDeploy extends Command
         }
 
         $this->newLine();
+        $this->line('Fixing storage/cache permissions...');
+        Artisan::call('storage:fix-permissions');
+        $this->output->write(Artisan::output());
+
+        $this->newLine();
         $this->line('Auto-syncing Meta platform connection + WhatsApp numbers...');
         Artisan::call('meta:auto-sync', ['--force' => true]);
         $this->output->write(Artisan::output());
@@ -57,6 +62,7 @@ class SafeDeploy extends Command
 
         $this->info('Safe deploy finished.');
         $this->line('VPS cron (required): * * * * * cd /path/to/app && php artisan schedule:run >> /dev/null 2>&1');
+        $this->line('Scheduler runs meta:auto-sync --force every 5 minutes (WhatsApp numbers always refreshed).');
         $this->line('Heavy Meta ads inventory sync (meta:sync-*) still runs on schedule; publish path uses live Graph.');
 
         return self::SUCCESS;
