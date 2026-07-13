@@ -230,7 +230,7 @@
                                 <input type="hidden" name="instagram_user_id"
                                     :value="form.instagram_user_id === '__manual_ig__' ? form.instagram_manual : form.instagram_user_id">
                                 <div x-show="form.instagram_user_id === '__manual_ig__' || showAddIg" class="mt-2 space-y-2 rounded-xl border border-pink-100 bg-pink-50/40 p-3">
-                                    <p class="text-xs text-slate-600">Paste the Instagram business account ID from Meta Business Settings → Instagram accounts (e.g. 17841468010858538).</p>
+                                    <p class="text-xs text-slate-600">Paste the Instagram business account ID from Meta Business Settings → Instagram accounts (e.g. 17841469374094212 for @xander_global_scholars).</p>
                                     <div class="flex flex-wrap gap-2">
                                         <input type="text" x-model="form.instagram_manual" placeholder="Instagram business account ID"
                                             class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-mono text-sm">

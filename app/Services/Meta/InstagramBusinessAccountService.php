@@ -426,10 +426,10 @@ class InstagramBusinessAccountService
 
         $hint = $hasIg
             ? 'Token has Instagram scopes. If @username is still missing, assign the Instagram asset to the System User and wait out Meta rate limits.'
-            : 'DEBUG: System User token has NO Instagram scopes. Page “Connected assets” shows moveabroadwithparrot, but Graph cannot return @username without Instagram permissions on the token. '
-                .'Fix: Meta Business Settings → System users → Generate token → enable Instagram permissions '
-                .'(instagram_basic, instagram_manage_insights, instagram_content_publish) → assign Instagram account to that System User → '
-                .'update META_SYSTEM_USER_TOKEN + WHATSAPP_ACCESS_TOKEN → Connection → Sync from .env → Instagram Sync now.';
+            : 'System User token is missing Instagram permissions, so Graph cannot return @username. '
+                .'In Meta Business Settings → System users, generate a token with Instagram scopes '
+                .'(instagram_basic, instagram_manage_insights, instagram_content_publish), assign this Business’s Instagram account to that System User, '
+                .'then update META_SYSTEM_USER_TOKEN + WHATSAPP_ACCESS_TOKEN and run Instagram Sync now.';
 
         return [
             'token_type' => data_get($response->json(), 'data.type'),

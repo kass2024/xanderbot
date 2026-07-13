@@ -75,7 +75,7 @@
         <div class="flex items-start justify-between gap-2">
             <div>
                 <h3 class="text-sm font-bold text-slate-900">Link Instagram account</h3>
-                <p class="mt-1 text-xs text-slate-600">Use the numeric Instagram account ID from Meta Business Suite (e.g. 17841468010858538 for @moveabroadwithparrot).</p>
+                <p class="mt-1 text-xs text-slate-600">Use the numeric Instagram account ID from Meta Business Suite (e.g. 17841469374094212 for @xander_global_scholars).</p>
             </div>
             <button type="button" @click="closePanel()" class="text-xs font-semibold text-slate-500">Close</button>
         </div>
@@ -84,7 +84,7 @@
             <div class="min-w-0 flex-1">
                 <label class="mb-1 block text-xs font-semibold text-slate-600">Instagram account ID</label>
                 <input type="text" name="instagram_id" value="{{ old('instagram_id') }}" required
-                       placeholder="17841468010858538"
+                       placeholder="17841469374094212"
                        class="w-full rounded-lg border-slate-300 text-sm focus:border-xander-navy focus:ring-xander-navy">
                 @error('instagram_id')
                     <p class="mt-1 text-xs text-red-600">{{ $message }}</p>
@@ -99,20 +99,6 @@
     @endif
     @if(session('error') || $error)
         <div class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{{ session('error') ?: $error }}</div>
-    @endif
-    @if(!empty($tokenDiag) && empty($tokenDiag['has_instagram_read']))
-        <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-            <p class="font-semibold">Debug: token cannot read Instagram @username</p>
-            <p class="mt-1">{{ $tokenDiag['hint'] ?? '' }}</p>
-            @if(!empty($tokenDiag['missing_instagram_scopes']))
-                <p class="mt-2 text-xs">Missing scopes: <code class="rounded bg-amber-100 px-1">{{ implode(', ', $tokenDiag['missing_instagram_scopes']) }}</code>
-                    @if(!empty($tokenDiag['token_type']))
-                        · Token type: <code class="rounded bg-amber-100 px-1">{{ $tokenDiag['token_type'] }}</code>
-                    @endif
-                </p>
-            @endif
-            <p class="mt-2 text-xs text-amber-800">Page “Connected assets” can show the IG account while the System User token still lacks Instagram API scopes — that is why Sync returns IDs only.</p>
-        </div>
     @endif
 
     <div class="mb-4">
