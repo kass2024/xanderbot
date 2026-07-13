@@ -148,9 +148,10 @@ Status
 <select name="status"
         class="w-full border rounded-lg px-3 py-2">
 
-@if($ad->status === 'ACTIVE')
-<option value="ACTIVE" selected>ACTIVE</option>
-@endif
+<option value="ACTIVE"
+{{ $ad->status == 'ACTIVE' ? 'selected' : '' }}>
+ACTIVE
+</option>
 
 <option value="PAUSED"
 {{ $ad->status == 'PAUSED' ? 'selected' : '' }}>
@@ -163,10 +164,6 @@ ARCHIVED
 </option>
 
 </select>
-
-@if($ad->status !== 'ACTIVE')
-<p class="mt-2 text-xs text-slate-500">To resume delivery, use <strong>Publish</strong> on the Ads list (auto-resume is disabled).</p>
-@endif
 
 </div>
 

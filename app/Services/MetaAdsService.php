@@ -21,7 +21,18 @@ class MetaAdsService
         $version = config('services.meta.graph_version', 'v19.0');
 
         $this->baseUrl = "https://graph.facebook.com/{$version}";
-        $this->accessToken = config('services.meta.token') ?: null;
+        $this->accessToken = config('services.meta.token')
+            ?: config('platform.meta.system_user_token')
+            ?: null;
+
+        if (! $this->accessToken) {
+            try {
+                $connection = \App\Models\PlatformMetaConnection::query()->platformDefault()->active()->first();
+                $this->accessToken = $connection?->plainAccessToken();
+            } catch (\Throwable) {
+                // Boot without DB (e.g. config:cache) is fine.
+            }
+        }
 
         $accountId = config('services.meta.ad_account_id');
         $this->defaultAccount = $accountId
@@ -311,7 +322,10 @@ protected function handleError($response, $endpoint, $payload = [])
     public function getPages(): array
     {
         try {
-            $res = $this->get('me/accounts');
+            $res = $this->get('me/accounts', [
+                'fields' => 'id,name,access_token,instagram_business_account{id,username},connected_instagram_account{id,username}',
+                'limit' => 100,
+            ]);
             $data = $res['data'] ?? [];
             if ($data !== []) {
                 return $data;
@@ -337,6 +351,161 @@ protected function handleError($response, $endpoint, $payload = [])
         }
 
         return [];
+    }
+
+    /**
+     * Pages enriched with linked Instagram accounts (for Ad Studio identity / destinations).
+     *
+     * @return array<int, array{id:string,name:string,instagram_id:?string,instagram_username:?string}>
+     */
+    public function listPagesWithInstagram(): array
+    {
+        $pages = [];
+        foreach ($this->getPages() as $page) {
+            $id = (string) ($page['id'] ?? '');
+            if ($id === '') {
+                continue;
+            }
+            $ig = $page['connected_instagram_account'] ?? $page['instagram_business_account'] ?? null;
+            $pages[] = [
+                'id' => $id,
+                'name' => (string) ($page['name'] ?? $id),
+                'instagram_id' => is_array($ig) && ! empty($ig['id']) ? (string) $ig['id'] : null,
+                'instagram_username' => is_array($ig) && ! empty($ig['username']) ? (string) $ig['username'] : null,
+            ];
+        }
+
+        return $pages;
+    }
+
+    /**
+     * All Instagram business accounts discoverable from pages + ad account.
+     *
+     * @return array<int, array{id:string,username:?string,source:string,page_id:?string,page_name:?string}>
+     */
+    public function listInstagramAccounts(?string $preferredPageId = null): array
+    {
+        $byId = [];
+
+        foreach ($this->listPagesWithInstagram() as $page) {
+            if (! empty($page['instagram_id'])) {
+                $byId[$page['instagram_id']] = [
+                    'id' => $page['instagram_id'],
+                    'username' => $page['instagram_username'],
+                    'source' => 'page',
+                    'page_id' => $page['id'],
+                    'page_name' => $page['name'],
+                ];
+            }
+        }
+
+        // Only deep-lookup the preferred page (avoid N Graph calls per page — was making Ad Studio hang)
+        $preferred = trim((string) ($preferredPageId ?? ''));
+        if ($preferred !== '' && ! collect($byId)->contains(fn ($row) => ($row['page_id'] ?? null) === $preferred)) {
+            $diag = $this->diagnoseInstagramConnection($preferred);
+            $igId = (string) ($diag['instagram_user_id'] ?? '');
+            if ($igId !== '' && ! isset($byId[$igId])) {
+                $byId[$igId] = [
+                    'id' => $igId,
+                    'username' => $diag['instagram_username'] ?? null,
+                    'source' => (string) ($diag['source'] ?? 'page'),
+                    'page_id' => $preferred,
+                    'page_name' => null,
+                ];
+            }
+        }
+
+        try {
+            $accountId = $this->formatAccount(config('services.meta.ad_account_id'));
+            $res = $this->get("{$accountId}/instagram_accounts", [
+                'fields' => 'id,username',
+                'limit' => 50,
+            ]);
+            foreach ($res['data'] ?? [] as $row) {
+                $id = (string) ($row['id'] ?? '');
+                if ($id === '') {
+                    continue;
+                }
+                if (! isset($byId[$id])) {
+                    $byId[$id] = [
+                        'id' => $id,
+                        'username' => $row['username'] ?? null,
+                        'source' => 'ad_account',
+                        'page_id' => null,
+                        'page_name' => null,
+                    ];
+                }
+            }
+        } catch (Throwable $e) {
+            Log::warning('META_LIST_INSTAGRAM_ACCOUNTS_FAILED', ['error' => $e->getMessage()]);
+        }
+
+        // Business Manager Instagram assets (Marketing API / BM guides)
+        $businessId = trim((string) (
+            config('platform.meta.business_id')
+            ?: config('services.meta.business_id')
+            ?: ''
+        ));
+        if ($businessId === '') {
+            try {
+                $connection = \App\Models\PlatformMetaConnection::query()->platformDefault()->active()->first();
+                $businessId = trim((string) ($connection?->business_id ?? ''));
+            } catch (Throwable) {
+                $businessId = '';
+            }
+        }
+        if ($businessId !== '') {
+            foreach ([
+                'owned_instagram_accounts',
+                'owned_instagram_assets',
+                'client_instagram_assets',
+                'client_instagram_accounts',
+                'instagram_accounts',
+            ] as $edge) {
+                try {
+                    $res = $this->get("{$businessId}/{$edge}", [
+                        'fields' => 'id,username,name',
+                        'limit' => 50,
+                    ]);
+                    foreach ($res['data'] ?? [] as $row) {
+                        $nested = is_array($row['ig_user'] ?? null) ? $row['ig_user'] : null;
+                        if ($nested) {
+                            $row = array_merge($row, $nested);
+                        }
+                        $id = (string) ($row['id'] ?? '');
+                        if ($id === '') {
+                            continue;
+                        }
+                        if (! isset($byId[$id])) {
+                            $byId[$id] = [
+                                'id' => $id,
+                                'username' => $row['username'] ?? null,
+                                'source' => $edge,
+                                'page_id' => null,
+                                'page_name' => null,
+                            ];
+                        } elseif (empty($byId[$id]['username']) && ! empty($row['username'])) {
+                            $byId[$id]['username'] = $row['username'];
+                        }
+                    }
+                } catch (Throwable $e) {
+                    Log::info('META_BM_IG_EDGE_SKIP', ['edge' => $edge, 'error' => $e->getMessage()]);
+                }
+            }
+        }
+
+        $envIg = trim((string) config('services.meta.instagram_user_id', ''));
+        if ($envIg !== '' && ! isset($byId[$envIg])) {
+            $byId[$envIg] = [
+                'id' => $envIg,
+                'username' => null,
+                'source' => 'env',
+                'page_id' => null,
+                'page_name' => null,
+            ];
+        }
+
+        return array_values($byId);
     }
 
     /*
@@ -885,21 +1054,27 @@ protected function buildTargeting(array $targeting): array
     }
 
     /**
-     * Build geo_locations from country codes and optional city entries.
-     * Countries with selected cities are targeted at city level only.
+     * Build geo_locations from country codes and optional city/region entries.
+     * Countries with selected cities or regions are targeted at that level only.
+     *
+     * @param  array<int, string>  $selectedCountries
+     * @param  array<int, array<string, mixed>>  $selectedCities
+     * @param  array<int, array<string, mixed>>  $selectedRegions
+     * @return array<string, mixed>
      */
-    public function buildGeoLocations(array $selectedCountries, array $selectedCities = []): array
+    public function buildGeoLocations(array $selectedCountries, array $selectedCities = [], array $selectedRegions = []): array
     {
         $countries = array_values(array_unique(array_map(
             fn ($code) => strtoupper(trim((string) $code)),
             $selectedCountries
         )));
 
-        if ($countries === []) {
-            throw new Exception('At least one country is required.');
+        if ($countries === [] && $selectedCities === [] && $selectedRegions === []) {
+            throw new Exception('At least one country, region, or city is required.');
         }
 
         $citiesByCountry = [];
+        $regionsByCountry = [];
 
         foreach ($selectedCities as $city) {
             if (! is_array($city)) {
@@ -907,7 +1082,7 @@ protected function buildTargeting(array $targeting): array
             }
 
             $key = trim((string) ($city['key'] ?? ''));
-            $country = strtoupper(trim((string) ($city['country'] ?? '')));
+            $country = strtoupper(trim((string) ($city['country'] ?? $city['country_code'] ?? '')));
 
             if ($key === '' || $country === '') {
                 continue;
@@ -931,18 +1106,56 @@ protected function buildTargeting(array $targeting): array
             $citiesByCountry[$country][] = $entry;
         }
 
-        $geo = [
-            'countries' => [],
-            'cities' => [],
-        ];
-
-        foreach ($countries as $country) {
-            if (! empty($citiesByCountry[$country])) {
-                $geo['cities'] = array_merge($geo['cities'], $citiesByCountry[$country]);
+        foreach ($selectedRegions as $region) {
+            if (! is_array($region)) {
                 continue;
             }
 
-            $geo['countries'][] = $country;
+            $key = trim((string) ($region['key'] ?? ''));
+            $country = strtoupper(trim((string) ($region['country'] ?? $region['country_code'] ?? '')));
+
+            if ($key === '' || $country === '') {
+                continue;
+            }
+
+            $entry = ['key' => $key];
+            if (! empty($region['name'])) {
+                $entry['name'] = (string) $region['name'];
+            }
+            $entry['country'] = $country;
+            $regionsByCountry[$country][] = $entry;
+        }
+
+        // Include countries implied by city/region picks
+        foreach (array_keys($citiesByCountry + $regionsByCountry) as $country) {
+            if (! in_array($country, $countries, true)) {
+                $countries[] = $country;
+            }
+        }
+
+        if ($countries === []) {
+            throw new Exception('At least one country is required.');
+        }
+
+        $geo = [
+            'countries' => [],
+            'cities' => [],
+            'regions' => [],
+        ];
+
+        foreach ($countries as $country) {
+            $hasCities = ! empty($citiesByCountry[$country]);
+            $hasRegions = ! empty($regionsByCountry[$country]);
+
+            if ($hasCities) {
+                $geo['cities'] = array_merge($geo['cities'], $citiesByCountry[$country]);
+            }
+            if ($hasRegions) {
+                $geo['regions'] = array_merge($geo['regions'], $regionsByCountry[$country]);
+            }
+            if (! $hasCities && ! $hasRegions) {
+                $geo['countries'][] = $country;
+            }
         }
 
         if ($geo['countries'] === []) {
@@ -953,8 +1166,12 @@ protected function buildTargeting(array $targeting): array
             unset($geo['cities']);
         }
 
-        if (! isset($geo['countries']) && ! isset($geo['cities'])) {
-            throw new Exception('At least one valid country or city is required.');
+        if ($geo['regions'] === []) {
+            unset($geo['regions']);
+        }
+
+        if (! isset($geo['countries']) && ! isset($geo['cities']) && ! isset($geo['regions'])) {
+            throw new Exception('At least one valid country, region, or city is required.');
         }
 
         return $geo;
@@ -989,6 +1206,26 @@ protected function buildTargeting(array $targeting): array
 
             if ($geoLocations['cities'] === []) {
                 unset($geoLocations['cities']);
+            }
+        }
+
+        if (! empty($geoLocations['regions']) && is_array($geoLocations['regions'])) {
+            $geoLocations['regions'] = array_values(array_map(function ($region) {
+                $key = is_array($region)
+                    ? trim((string) ($region['key'] ?? ''))
+                    : trim((string) $region);
+
+                if ($key === '') {
+                    return null;
+                }
+
+                return ['key' => $key];
+            }, $geoLocations['regions']));
+
+            $geoLocations['regions'] = array_values(array_filter($geoLocations['regions']));
+
+            if ($geoLocations['regions'] === []) {
+                unset($geoLocations['regions']);
             }
         }
 
@@ -1231,6 +1468,66 @@ protected function buildTargeting(array $targeting): array
                 'supports_city' => (bool) ($item['supports_city'] ?? true),
             ];
         })->filter(fn ($item) => $item['key'] !== '' && $item['name'] !== '')->values()->all();
+    }
+
+    /**
+     * Auto-suggest cities for selected countries via Meta Targeting Search + seed names.
+     *
+     * @param  array<int, string>  $countryCodes
+     * @return array<int, array<string, mixed>>
+     */
+    public function suggestCitiesForCountries(array $countryCodes, string $locationType = 'city'): array
+    {
+        $codes = array_values(array_unique(array_filter(array_map(
+            fn ($c) => strtoupper(trim((string) $c)),
+            $countryCodes
+        ))));
+
+        if ($codes === []) {
+            return [];
+        }
+
+        $seeds = config('meta.major_cities', []);
+        $countryNames = config('meta.countries', []);
+        $seen = [];
+        $results = [];
+
+        foreach ($codes as $code) {
+            $queries = $seeds[$code] ?? [];
+            if ($queries === []) {
+                $name = (string) ($countryNames[$code] ?? '');
+                if ($name !== '') {
+                    $queries = [explode(' ', $name)[0], $name];
+                }
+                // Letter probes so Meta returns cities even without a curated list
+                $queries = array_merge($queries, ['ka', 'ki', 'mu', 'na', 'to', 'la', 'sa', 'ma']);
+            }
+
+            $queries = array_values(array_unique(array_filter(array_map(
+                fn ($q) => trim((string) $q),
+                $queries
+            ), fn ($q) => strlen($q) >= 2)));
+
+            foreach (array_slice($queries, 0, 12) as $query) {
+                foreach ($this->searchGeoLocations($query, $locationType, $code) as $hit) {
+                    $key = (string) ($hit['key'] ?? '');
+                    if ($key === '' || isset($seen[$key])) {
+                        continue;
+                    }
+                    $hitCountry = strtoupper((string) ($hit['country_code'] ?? ''));
+                    if ($hitCountry !== '' && $hitCountry !== $code) {
+                        continue;
+                    }
+                    $seen[$key] = true;
+                    $hit['country_code'] = $hitCountry !== '' ? $hitCountry : $code;
+                    $results[] = $hit;
+                }
+            }
+        }
+
+        usort($results, fn ($a, $b) => strcasecmp((string) $a['name'], (string) $b['name']));
+
+        return array_slice($results, 0, 60);
     }
 
     protected function resolveDestinationType(string $optimizationGoal): ?string
@@ -1775,7 +2072,28 @@ public function getCampaigns(string $accountId): array
     $accountId = $this->formatAccount($accountId);
 
     return $this->get("{$accountId}/campaigns", [
-        'fields' => 'id,name,status,objective'
+        'fields' => 'id,name,status,effective_status,objective,configured_status',
+        'limit' => 200,
+        'filtering' => json_encode([
+            [
+                'field' => 'effective_status',
+                'operator' => 'IN',
+                'value' => [
+                    'ACTIVE',
+                    'PAUSED',
+                    'DELETED',
+                    'PENDING_REVIEW',
+                    'DISAPPROVED',
+                    'PREAPPROVED',
+                    'PENDING_BILLING_INFO',
+                    'CAMPAIGN_PAUSED',
+                    'ARCHIVED',
+                    'ADSET_PAUSED',
+                    'IN_PROCESS',
+                    'WITH_ISSUES',
+                ],
+            ],
+        ]),
     ]);
 }
 
@@ -1985,7 +2303,7 @@ public function getCreative(string $creativeId): array
 public function getCampaign(string $campaignId): array
 {
     return $this->get($campaignId, [
-        'fields' => 'id,name,status,objective'
+        'fields' => 'id,name,status,effective_status,objective,configured_status',
     ]);
 }
 /**

@@ -30,13 +30,17 @@ use App\Http\Controllers\Admin\{
     AdminDashboardController,
     AdminClientController,
     AdminMetaController,
+    WhatsAppAccountsController,
+    InstagramAccountsController,
     AdAccountController,
     CampaignController as AdminCampaignController,
     AdSetController,
     AdController,
     AnalyticsController,
     CreativeController,
+    CreativeBuilderController,
     MarketingWizardController,
+    AdStudioController,
     MetaApiLogController,
     UserController
 };
@@ -50,8 +54,9 @@ use App\Http\Controllers\Admin\{
 
 Route::view('/', 'welcome')->name('home');
 
-Route::get('/register/facebook-pages', \App\Http\Controllers\Public\RegisterPagesController::class)
-    ->name('register.pages');
+Route::get('/register/facebook-pages/search', \App\Http\Controllers\Public\RegisterPageSearchController::class)
+    ->middleware('throttle:40,1')
+    ->name('register.pages.search');
 
 
 /*
@@ -114,6 +119,11 @@ Route::middleware(['auth','verified','role:client'])
 
         Route::get('/dashboard', [DashboardController::class,'index'])
             ->name('dashboard');
+
+        Route::get('/profile', [\App\Http\Controllers\Client\ProfileController::class, 'edit'])
+            ->name('profile.edit');
+        Route::put('/profile', [\App\Http\Controllers\Client\ProfileController::class, 'update'])
+            ->name('profile.update');
 
 
         /*
@@ -197,7 +207,7 @@ Route::middleware(['auth','verified','role:client'])
             ->group(function () {
 
                 Route::get('/',
-                    fn() => view('client.meta.index'))
+                    fn () => redirect()->route('client.profile.edit'))
                     ->name('index');
 
                 Route::get('/connect',
@@ -262,6 +272,11 @@ Route::middleware(['auth','verified','role:admin,client'])
             [AdminClientController::class,'stopImpersonation'])
             ->name('impersonation.stop');
 
+        Route::get('tenants', [\App\Http\Controllers\Admin\TenantMonitorController::class, 'index'])
+            ->name('tenants.index');
+        Route::post('tenants/sync-platform', [\App\Http\Controllers\Admin\TenantMonitorController::class, 'syncPlatform'])
+            ->name('tenants.sync-platform');
+
 
         /*
         |--------------------------------------------------------------------------
@@ -278,6 +293,24 @@ Route::middleware(['auth','verified','role:admin,client'])
             Route::get('/callback',[AdminMetaController::class,'callback'])->name('callback');
 
             Route::post('/disconnect',[AdminMetaController::class,'disconnect'])->name('disconnect');
+
+            Route::get('/whatsapp', [WhatsAppAccountsController::class, 'index'])->name('whatsapp.index');
+            Route::post('/whatsapp/link', [WhatsAppAccountsController::class, 'linkWaba'])->name('whatsapp.link');
+            Route::post('/whatsapp/link/phone', [WhatsAppAccountsController::class, 'linkByPhoneStart'])->name('whatsapp.link.phone');
+            Route::post('/whatsapp/link/verify', [WhatsAppAccountsController::class, 'linkByPhoneVerify'])->name('whatsapp.link.verify');
+            Route::post('/whatsapp/link/resend', [WhatsAppAccountsController::class, 'linkByPhoneResend'])->name('whatsapp.link.resend');
+            Route::post('/whatsapp/link/complete', [WhatsAppAccountsController::class, 'linkByPhoneComplete'])->name('whatsapp.link.complete');
+            Route::post('/whatsapp/create', [WhatsAppAccountsController::class, 'createWaba'])->name('whatsapp.create');
+            Route::post('/whatsapp/request', [WhatsAppAccountsController::class, 'requestClientWaba'])->name('whatsapp.request');
+            Route::post('/whatsapp/phones', [WhatsAppAccountsController::class, 'addPhone'])->name('whatsapp.phones.add');
+            Route::post('/whatsapp/phones/resend', [WhatsAppAccountsController::class, 'resendCode'])->name('whatsapp.phones.resend');
+            Route::post('/whatsapp/phones/verify', [WhatsAppAccountsController::class, 'verifyPhone'])->name('whatsapp.phones.verify');
+            Route::post('/whatsapp/phones/default', [WhatsAppAccountsController::class, 'setDefault'])->name('whatsapp.phones.default');
+
+            Route::get('/instagram', [InstagramAccountsController::class, 'index'])->name('instagram.index');
+            Route::post('/instagram/link', [InstagramAccountsController::class, 'link'])->name('instagram.link');
+            Route::post('/instagram/default', [InstagramAccountsController::class, 'setDefault'])->name('instagram.default');
+            Route::post('/instagram/sync', [InstagramAccountsController::class, 'sync'])->name('instagram.sync');
         });
 
 
@@ -329,6 +362,17 @@ Route::middleware(['auth','verified','role:admin,client'])
         Route::resource('campaigns', AdminCampaignController::class)->names('campaigns');
 
         Route::prefix('marketing')->name('marketing.')->group(function () {
+            Route::get('create', [AdStudioController::class, 'create'])->name('create');
+            Route::get('create/whatsapp-numbers', [AdStudioController::class, 'whatsappNumbers'])->name('create.whatsapp-numbers');
+            Route::get('create/identities', [AdStudioController::class, 'identities'])->name('create.identities');
+            Route::post('create/identities', [AdStudioController::class, 'saveIdentity'])->name('create.identities.save');
+            Route::post('create/preflight', [AdStudioController::class, 'preflight'])->name('create.preflight');
+            Route::post('create/generate', [AdStudioController::class, 'generate'])->name('create.generate');
+            Route::post('create/generate-image', [AdStudioController::class, 'generateImage'])->name('create.generate-image');
+            Route::post('create/analyze-creative', [AdStudioController::class, 'analyzeCreative'])->name('create.analyze-creative');
+            Route::post('create/validate-media', [AdStudioController::class, 'validateMedia'])->name('create.validate-media');
+            Route::post('create/publish', [AdStudioController::class, 'publish'])->name('create.publish');
+            Route::post('create/draft', [AdStudioController::class, 'saveDraft'])->name('create.draft');
             Route::get('wizard', [MarketingWizardController::class, 'index'])->name('wizard');
             Route::post('wizard/step', [MarketingWizardController::class, 'saveStep'])->name('wizard.step');
             Route::post('wizard/preflight', [MarketingWizardController::class, 'preflight'])->name('wizard.preflight');
@@ -339,12 +383,12 @@ Route::middleware(['auth','verified','role:admin,client'])
 
         // Campaign-specific actions
         Route::prefix('campaigns')->name('campaigns.')->group(function () {
+            Route::post('sync-all', [AdminCampaignController::class, 'syncAll'])->name('sync-all');
             Route::patch('{campaign}/activate', [AdminCampaignController::class, 'activate'])->name('activate');
             Route::patch('{campaign}/pause', [AdminCampaignController::class, 'pause'])->name('pause');
             Route::post('{campaign}/duplicate', [AdminCampaignController::class, 'duplicate'])->name('duplicate');
             Route::get('{campaign}/insights', [AdminCampaignController::class, 'insights'])->name('insights');
-            Route::post('{campaign}/sync', [AdminCampaignController::class, 'sync'])
-    ->name('sync');
+            Route::post('{campaign}/sync', [AdminCampaignController::class, 'sync'])->name('sync');
         });
 
 
@@ -445,6 +489,13 @@ Route::get('{ad}/preview', [AdController::class,'preview'])
 | CREATIVES
 |--------------------------------------------------------------------------
 */
+
+Route::get('creatives/builder', [CreativeBuilderController::class, 'create'])->name('creatives.builder');
+Route::post('creatives/builder', [CreativeBuilderController::class, 'store'])->name('creatives.builder.store');
+Route::post('creatives/builder/generate', [CreativeBuilderController::class, 'generate'])->name('creatives.builder.generate');
+Route::post('creatives/builder/validate', [CreativeBuilderController::class, 'validatePreview'])->name('creatives.builder.validate');
+Route::get('creatives/builder/context', [CreativeBuilderController::class, 'context'])->name('creatives.builder.context');
+Route::get('creatives/builder/campaigns/{campaign}/adsets', [CreativeBuilderController::class, 'adsetsForCampaign'])->name('creatives.builder.adsets');
 
 Route::resource('creatives', CreativeController::class)->names('creatives');
 
@@ -601,6 +652,8 @@ Route::get('/admin/meta/interests', [\App\Http\Controllers\Admin\MetaTargetingCo
 
 Route::get('/admin/meta/geo', [\App\Http\Controllers\Admin\MetaTargetingController::class, 'searchGeoLocations'])
     ->name('admin.meta.geo');
+Route::get('/admin/meta/geo/suggest', [\App\Http\Controllers\Admin\MetaTargetingController::class, 'suggestGeoLocations'])
+    ->name('admin.meta.geo.suggest');
 
 /*
 |--------------------------------------------------------------------------

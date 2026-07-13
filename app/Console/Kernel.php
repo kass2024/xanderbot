@@ -11,6 +11,12 @@ class Kernel extends ConsoleKernel
     protected function schedule(Schedule $schedule): void
     {
 
+        $schedule->command('meta:auto-sync --force')
+            ->everyFiveMinutes()
+            ->withoutOverlapping()
+            ->name('meta-auto-sync')
+            ->appendOutputTo(storage_path('logs/meta-auto-sync.log'));
+
         /*
         |--------------------------------------------------------------------------
         | 🔥 META ADS SYNC (CORE ENGINE)
@@ -19,8 +25,8 @@ class Kernel extends ConsoleKernel
         */
 
         $schedule->command('meta:sync-ads')
-            ->everyFifteenMinutes()
-            ->withoutOverlapping(20)
+            ->everyFiveMinutes()
+            ->withoutOverlapping()
             ->name('meta-sync-ads')
             ->before(fn () => Log::info('META_SYNC_START', ['time' => now()]))
             ->after(fn () => Log::info('META_SYNC_DONE', ['time' => now()]))
@@ -63,12 +69,6 @@ class Kernel extends ConsoleKernel
         |--------------------------------------------------------------------------
         | No need every minute → heavy DB writes
         */
-
-        $schedule->command('ads:enforce-budgets')
-            ->everyTwoMinutes()
-            ->withoutOverlapping(3)
-            ->name('ads-enforce-budgets')
-            ->appendOutputTo(storage_path('logs/ad-budget-enforce.log'));
 
         $schedule->command('ads:reset-daily-budget')
             ->everyFiveMinutes()
@@ -124,6 +124,19 @@ class Kernel extends ConsoleKernel
             ]);
 
         })->hourly()->name('system-heartbeat');
+
+        /*
+        |--------------------------------------------------------------------------
+        | 🗄️ AUTO MIGRATIONS (production VPS)
+        |--------------------------------------------------------------------------
+        | Catches pending migrations if deploy script was skipped.
+        */
+
+        $schedule->command('migrate:auto --force --no-fail')
+            ->dailyAt('03:15')
+            ->withoutOverlapping()
+            ->name('auto-migrate')
+            ->appendOutputTo(storage_path('logs/migrate-auto.log'));
     }
 
     protected function commands(): void

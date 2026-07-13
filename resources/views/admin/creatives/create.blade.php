@@ -21,12 +21,6 @@
 </div>
 
 
-@if(session('success'))
-<div class="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-{{ session('success') }}
-</div>
-@endif
-
 @if($errors->any())
 <div class="mb-6 bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
 <ul class="list-disc ml-6">
@@ -63,7 +57,7 @@ required>
 
 @foreach($campaigns as $campaign)
 
-<option value="{{ $campaign->id }}" @selected((string) old('campaign_id', $selectedCampaign ?? '') === (string) $campaign->id)>
+<option value="{{ $campaign->id }}">
 {{ $campaign->name }}
 </option>
 
@@ -92,7 +86,7 @@ required>
 
 @foreach($adsets as $adset)
 
-<option value="{{ $adset->id }}" @selected((string) old('adset_id', $selectedAdset ?? '') === (string) $adset->id)>
+<option value="{{ $adset->id }}">
 {{ $adset->name }}
 </option>
 
@@ -111,16 +105,24 @@ required>
 Facebook Page
 </label>
 
+@if(empty($pages))
+<p class="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    No pages were returned from the Graph API. Set <code class="rounded bg-amber-100 px-1">META_PAGE_ID</code> (and optional <code class="rounded bg-amber-100 px-1">META_PAGE_NAME</code>) in <code class="rounded bg-amber-100 px-1">.env</code> to use a fallback, or fix outbound DNS / firewall so this server can reach <code class="rounded bg-amber-100 px-1">graph.facebook.com</code>.
+</p>
+@endif
+
 <select
 name="page_id"
 class="w-full rounded-xl border border-slate-200 px-4 py-3 shadow-sm focus:border-xander-navy focus:ring-2 focus:ring-xander-navy/20"
-required>
+@unless(empty($pages)) required @endunless
+@if(empty($pages)) disabled @endif
+>
 
 <option value="">Select Page</option>
 
 @foreach($pages as $page)
 
-<option value="{{ $page['id'] }}" @selected((string) old('page_id', $selectedPage ?? '') === (string) $page['id'])>
+<option value="{{ $page['id'] }}">
 {{ $page['name'] }}
 </option>
 
@@ -239,16 +241,10 @@ Creative Image
 <input
 type="file"
 name="image"
-accept="image/jpeg,image/png,image/webp"
+accept="image/*"
 class="w-full border rounded-xl px-4 py-3"
 onchange="previewImage(event)"
 required>
-
-<p class="mt-1 text-xs text-slate-500">JPG or PNG, max 5MB. Large images are auto-resized for Meta after upload.</p>
-
-@error('image')
-<p class="mt-2 text-sm text-red-600">{{ $message }}</p>
-@enderror
 
 </div>
 

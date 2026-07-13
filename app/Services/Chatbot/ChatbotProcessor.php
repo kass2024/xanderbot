@@ -181,7 +181,7 @@ class ChatbotProcessor
 
                 /*
                 |--------------------------------------------------------------------------
-                | Profile onboarding - Always collect name and email first
+                | MANDATORY PROFILE ONBOARDING
                 |--------------------------------------------------------------------------
                 */
 
@@ -271,41 +271,21 @@ class ChatbotProcessor
     protected function handleOnboarding(Conversation $conversation, string $message): array
     {
         $message = trim($message);
-        $conversation->refresh();
 
-        // STEP 0 → first contact - ALWAYS ask for name first
+        // STEP 0 → Ask Name
         if (! $conversation->profile_step) {
 
-            // Set the step to ask_name immediately
             $conversation->update([
                 'profile_step' => 'ask_name',
             ]);
 
-            // If user provides a name directly (not a greeting)
-            if (strlen($message) >= 3 && ! $this->messageLooksLikeGreeting($message)) {
-                $conversation->update([
-                    'customer_name' => $message,
-                    'profile_step' => 'ask_email',
-                ]);
-
-                return $this->systemReply(
-                    "Thank you {$message} 😊\nNow please provide your *email address*."
-                );
-            }
-
-            // Always ask for name - NO AI responses during onboarding
             return $this->systemReply(
-                "Welcome to Xander Global Scholars! 👋\n\nBefore we continue, please provide your *full name*."
+                "Welcome 👋\nBefore we continue, please provide your *full name*."
             );
         }
 
-        // STEP 1 → Ask for Name
+        // STEP 1 → Save Name
         if ($conversation->profile_step === 'ask_name') {
-
-            // If it's a greeting, just ask for name again
-            if ($this->messageLooksLikeGreeting($message)) {
-                return $this->systemReply('Hello! Please provide your *full name* to get started.');
-            }
 
             if (strlen($message) < 3) {
                 return $this->systemReply('Please enter your full name.');
@@ -335,32 +315,11 @@ class ChatbotProcessor
             ]);
 
             return $this->systemReply(
-                '✅ Thank you! Your profile is complete.\n\nI\'m now ready to help you with:\n• Student visa applications\n• Study abroad programs\n• Scholarship opportunities\n• University applications\n• And much more!\n\nWhat would you like to know?'
+                '✅ Thank you! You can now ask your questions.'
             );
         }
 
         return $this->systemReply('Please continue.');
-    }
-
-    protected function messageLooksLikeGreeting(string $message): bool
-    {
-        $t = strtolower(trim($message));
-        $greetings = [
-            'hi', 'hello', 'hey', 'hola', 'good morning', 'good afternoon', 'good evening',
-            'good day', 'howdy', 'sup', 'yo',
-        ];
-
-        if (in_array($t, $greetings, true)) {
-            return true;
-        }
-
-        foreach (['hello', 'hi ', 'hey ', 'good morning', 'good afternoon'] as $prefix) {
-            if (str_starts_with($t, $prefix)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     protected function systemReply(string $text): array

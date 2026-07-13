@@ -58,7 +58,7 @@ Ad Name
 <input
 type="text"
 name="name"
-value="{{ old('name', request('name')) }}"
+value="{{ old('name') }}"
 class="w-full border rounded-lg px-4 py-2 focus:ring focus:ring-blue-200"
 required>
 
@@ -82,7 +82,7 @@ required>
 
 <option
 value="{{ $adset->id }}"
-{{ old('adset_id', request('adset')) == $adset->id ? 'selected' : '' }}
+{{ old('adset_id') == $adset->id ? 'selected' : '' }}
 >
 
 {{ $adset->name }}
@@ -122,7 +122,7 @@ value="{{ $creative->id }}"
 data-headline="{{ $creative->headline }}"
 data-body="{{ $creative->body }}"
 data-image="{{ $creative->image_url }}"
-{{ old('creative_id', request('creative')) == $creative->id ? 'selected' : '' }}
+{{ old('creative_id') == $creative->id ? 'selected' : '' }}
 >
 
 {{ $creative->name }}
@@ -164,9 +164,17 @@ required>
 Status
 </label>
 
-<input type="hidden" name="status" value="PAUSED">
+<select name="status" class="w-full border rounded-lg px-4 py-2">
 
-<p class="text-xs text-slate-500">New ads are created <strong>Paused</strong>. Use <strong>Publish</strong> on the Ads list when you are ready to spend.</p>
+<option value="PAUSED" {{ old('status') == 'PAUSED' ? 'selected' : '' }}>
+Paused
+</option>
+
+<option value="ACTIVE" {{ old('status') == 'ACTIVE' ? 'selected' : '' }}>
+Active
+</option>
+
+</select>
 
 </div>
 

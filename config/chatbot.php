@@ -4,18 +4,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Profile onboarding (name + email before FAQ)
-    |--------------------------------------------------------------------------
-    | false = reply to Hello / questions immediately (recommended, like WABA FAQ).
-    | true  = ask full name + email first (old behaviour).
-    */
-    'require_profile_onboarding' => filter_var(
-        env('CHATBOT_REQUIRE_PROFILE_ONBOARDING', false),
-        FILTER_VALIDATE_BOOL
-    ),
-
-    /*
-    |--------------------------------------------------------------------------
     | Voice replies (FAQ / bot → customer on WhatsApp)
     |--------------------------------------------------------------------------
     | When enabled, FAQ-sourced replies also send a short MP3 via OpenAI TTS.

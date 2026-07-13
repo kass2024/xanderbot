@@ -26,7 +26,7 @@
         </p>
         <p class="mt-2 inline-flex items-center gap-2 text-xs text-slate-500">
             <span id="live-indicator" class="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true"></span>
-            <span id="live-status">Saved metrics — syncing with Meta…</span>
+            <span id="live-status">Live from Meta — updating…</span>
         </p>
     </div>
     <div class="flex flex-shrink-0 flex-wrap items-center gap-2 sm:gap-3">
@@ -36,19 +36,7 @@
         >
             Ad sets
         </a>
-        <form method="POST" action="{{ route('admin.ads.resync-metrics') }}" class="m-0">
-            @csrf
-            <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-900 shadow-sm transition hover:bg-sky-100" title="Pull lifetime spend/impressions from Meta (current + paused ad ids)">
-                Resync from Meta
-            </button>
-        </form>
-        <form method="POST" action="{{ route('admin.ads.ensure-brand-pages') }}" class="m-0" onsubmit="return confirm('Link all ads to your Facebook Page and Instagram on Meta? This rebuilds creatives if needed and does NOT create new ad ids (metrics stay intact).');">
-            @csrf
-            <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-900 shadow-sm transition hover:bg-indigo-100" title="Set which Facebook Page and Instagram account name appears on ads. Delivery still goes to your ad set audience worldwide.">
-                FB + IG identity
-            </button>
-        </form>
-        <form method="POST" action="{{ route('admin.ads.enable-instagram-all') }}" class="m-0" onsubmit="return confirm('Enable Instagram on ALL ads? This updates legacy ad sets to Facebook+Instagram only, rebuilds creatives, and creates new Meta ads where needed (old ads paused). Continue?');">
+        <form method="POST" action="{{ route('admin.ads.enable-instagram-all') }}" class="m-0" onsubmit="return confirm('Update ALL existing campaigns, ad sets, creatives, and ads on Meta for Instagram delivery?');">
             @csrf
             <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-2.5 text-sm font-semibold text-fuchsia-900 shadow-sm transition hover:bg-fuchsia-100">
                 Enable IG (all existing)
@@ -84,19 +72,19 @@ ALERTS
 <div class="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
     <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
         <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Total ads</p>
-        <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900" id="metric-total-ads">{{ $ads->total() }}</p>
+        <p class="mt-1 text-2xl font-bold tabular-nums text-slate-900" id="metric-total-ads">{{ $metrics['total_ads'] }}</p>
     </div>
     <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
         <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Active</p>
-        <p class="mt-1 text-2xl font-bold tabular-nums text-emerald-600" id="metric-active-ads">{{ $ads->getCollection()->where('status','ACTIVE')->count() }}</p>
+        <p class="mt-1 text-2xl font-bold tabular-nums text-emerald-600" id="metric-active-ads">{{ $metrics['active_ads'] }}</p>
     </div>
     <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
-        <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Lifetime spend</p>
-        <p class="mt-1 text-2xl font-bold tabular-nums text-xander-navy" id="metric-total-spend">${{ number_format($ads->getCollection()->sum('spend'),2) }}</p>
+        <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Total spend</p>
+        <p class="mt-1 text-2xl font-bold tabular-nums text-xander-navy" id="metric-total-spend">${{ number_format($metrics['total_spend'], 2) }}</p>
     </div>
     <div class="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
         <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Clicks</p>
-        <p class="mt-1 text-2xl font-bold tabular-nums text-slate-800" id="metric-total-clicks">{{ number_format($ads->getCollection()->sum('clicks')) }}</p>
+        <p class="mt-1 text-2xl font-bold tabular-nums text-slate-800" id="metric-total-clicks">{{ number_format($metrics['total_clicks']) }}</p>
     </div>
 </div>
 
@@ -104,7 +92,7 @@ ALERTS
 {{-- TABLE: horizontal scroll + sticky Actions column --}}
 <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm ring-1 ring-slate-900/5">
     <div class="overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
-        <table class="w-full min-w-[1240px] border-collapse text-left text-sm text-slate-700">
+        <table class="w-full min-w-[1180px] border-collapse text-left text-sm text-slate-700">
 
 <thead>
 <tr class="border-b border-slate-200 bg-slate-50/95 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -114,11 +102,10 @@ ALERTS
 <th class="whitespace-nowrap px-4 py-3 lg:px-5">Delivery</th>
 <th class="min-w-[9rem] whitespace-nowrap px-4 py-3 lg:px-5">Platforms</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Impr.</th>
-<th class="whitespace-nowrap px-4 py-3 text-right tabular-nums text-fuchsia-700 lg:px-5" title="Instagram impressions (Meta)">IG impr.</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Clicks</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">CTR</th>
-<th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" title="All-time spend on Meta">Lifetime</th>
-<th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" title="Spend today">Today</th>
+<th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Spend</th>
+<th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Today</th>
 <th class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5">Budget</th>
 <th class="min-w-[6rem] whitespace-nowrap px-4 py-3 lg:px-5">Reason</th>
 <th class="sticky right-0 z-20 min-w-[10.5rem] whitespace-nowrap border-l border-slate-200 bg-slate-50/95 px-4 py-3 text-right shadow-[-12px_0_24px_-12px_rgba(15,23,42,0.12)] backdrop-blur-sm lg:min-w-[11rem] lg:px-5">Actions</th>
@@ -198,18 +185,49 @@ ALERTS
 
 </td>
 
-{{-- PLATFORMS (configured targets + Meta delivery by publisher_platform) --}}
+{{-- PLATFORMS --}}
 <td class="min-w-[9rem] px-4 py-3 align-top lg:px-5" id="platforms-{{ $ad->id }}">
-    @include('admin.ads._platforms_cell', ['ad' => $ad, 'placement' => $ad->placement ?? []])
+@php
+    $placementDelivery = is_array($ad->placement_delivery ?? null) ? $ad->placement_delivery : [];
+    $igImp = (int) ($placementDelivery['instagram']['impressions'] ?? 0);
+    $fbImp = (int) ($placementDelivery['facebook']['impressions'] ?? 0);
+    $igClicks = (int) ($placementDelivery['instagram']['clicks'] ?? 0);
+    $targetLabels = $ad->adSet?->placementTargetLabels() ?? [];
+    $targetsIg = $ad->adSet?->targetsInstagram() ?? false;
+@endphp
+    <div class="space-y-1">
+        @if(count($targetLabels))
+            <div class="text-[11px] text-slate-500" title="Ad set placement settings">
+                Target: {{ implode(', ', $targetLabels) }}
+            </div>
+        @endif
+        @if($igImp > 0)
+            <span class="inline-flex rounded-md bg-fuchsia-50 px-2 py-0.5 text-xs font-semibold text-fuchsia-800 ring-1 ring-fuchsia-600/15">
+                IG live · {{ number_format($igImp) }} impr.
+            </span>
+        @elseif($fbImp > 0 && $targetsIg)
+            <span class="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/15">
+                FB only · IG pending
+            </span>
+            @if($ad->meta_ad_id)
+            <form method="POST" action="{{ route('admin.ads.enable-instagram', $ad) }}" class="m-0">
+                @csrf
+                <button type="submit" class="text-[11px] font-semibold text-fuchsia-700 underline">Enable IG</button>
+            </form>
+            @endif
+        @elseif($fbImp > 0)
+            <span class="inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-600/15">Facebook only</span>
+        @elseif($targetsIg)
+            <span class="inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-400/20">IG targeted · no data yet</span>
+        @else
+            <span class="text-xs text-slate-400">—</span>
+        @endif
+    </div>
 </td>
 
 
 {{-- IMPRESSIONS --}}
 <td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" id="imp-{{ $ad->id }}">{{ number_format($ad->impressions ?? 0) }}</td>
-
-{{-- IG IMPRESSIONS --}}
-@php $igImpr = (int) (($ad->placement ?? [])['instagram_impressions'] ?? 0); @endphp
-<td class="whitespace-nowrap px-4 py-3 text-right tabular-nums font-medium text-fuchsia-800 lg:px-5" id="ig-imp-{{ $ad->id }}">{{ number_format($igImpr) }}</td>
 
 {{-- CLICKS --}}
 <td class="whitespace-nowrap px-4 py-3 text-right tabular-nums lg:px-5" id="clk-{{ $ad->id }}">{{ number_format($ad->clicks ?? 0) }}</td>
@@ -232,7 +250,7 @@ ALERTS
 {{-- REASON --}}
 <td class="px-4 py-3 align-top lg:px-5">
 
-@if(in_array($ad->pause_reason, ['budget_limit', 'budget'], true))
+@if($ad->pause_reason === 'budget_limit')
 <span class="inline-flex rounded-md bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-800 ring-1 ring-red-600/15">Budget limit</span>
 @elseif($ad->pause_reason === 'manual')
 <span class="inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-400/20">Manual</span>
@@ -249,7 +267,13 @@ ALERTS
         @if($ad->status !== 'ACTIVE')
             <form method="POST" action="{{ route('admin.ads.publish',$ad->id) }}" class="m-0">
                 @csrf
-                <button type="submit" class="w-full rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15 transition hover:bg-emerald-100" title="Resume delivery and start a new spend session">Publish</button>
+                <button type="submit" class="w-full rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15 transition hover:bg-emerald-100">
+                    @if($ad->pause_reason === 'budget_limit')
+                        Publish again
+                    @else
+                        Publish
+                    @endif
+                </button>
             </form>
         @endif
         @if($ad->status === 'ACTIVE')
@@ -318,6 +342,10 @@ let running = false;
 const REFRESH_MS = 20000;
 const FETCH_TIMEOUT_MS = 45000;
 
+/* =============================
+   FORMATTERS
+============================= */
+
 function money(v){
     return '$' + Number(v || 0).toFixed(2);
 }
@@ -345,6 +373,11 @@ function setLiveStatus(ok, refreshedAt, warning){
     }
 }
 
+
+/* =============================
+   STATUS BADGE
+============================= */
+
 function renderStatus(status){
 
     switch(status){
@@ -368,6 +401,7 @@ function renderStatus(status){
 
 }
 
+
 function renderCtr(ctr){
     const value = Number(ctr || 0);
     let color = 'text-slate-600';
@@ -381,7 +415,7 @@ function renderCtr(ctr){
     return '<span class="font-semibold ctr-value ' + color + '">' + value.toFixed(2) + '%</span>';
 }
 
-function renderPlatforms(placement, adId, enableUrl){
+function renderPlatforms(placement){
     if(!placement){
         return '<span class="text-xs text-slate-400">—</span>';
     }
@@ -391,20 +425,15 @@ function renderPlatforms(placement, adId, enableUrl){
         ? '<div class="text-[11px] text-slate-500">Target: ' + targets.join(', ') + '</div>'
         : '';
 
-    const status = placement.status || '';
     const igImp = Number(placement.instagram_impressions || 0);
     const fbImp = Number(placement.facebook_impressions || 0);
-    const igClicks = Number(placement.instagram_clicks || 0);
-    const anImp = Number(placement.audience_network_impressions || 0);
     const targetsIg = !!placement.targets_instagram;
 
     let badge = '<span class="text-xs text-slate-400">—</span>';
 
-    if(status === 'live' || igImp > 0){
-        badge = '<span class="inline-flex rounded-md bg-fuchsia-50 px-2 py-0.5 text-xs font-semibold text-fuchsia-800 ring-1 ring-fuchsia-600/15" title="' + igImp.toLocaleString() + ' impressions, ' + igClicks.toLocaleString() + ' clicks on Instagram">IG live · ' + igImp.toLocaleString() + ' impr.</span>';
-    } else if(status === 'enabled'){
-        badge = '<span class="inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15">IG enabled</span>';
-    } else if(status === 'pending'){
+    if(igImp > 0){
+        badge = '<span class="inline-flex rounded-md bg-fuchsia-50 px-2 py-0.5 text-xs font-semibold text-fuchsia-800 ring-1 ring-fuchsia-600/15">IG live · ' + igImp.toLocaleString() + ' impr.</span>';
+    } else if(fbImp > 0 && targetsIg){
         badge = '<span class="inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/15">FB only · IG pending</span>';
     } else if(fbImp > 0){
         badge = '<span class="inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-600/15">Facebook only</span>';
@@ -412,13 +441,13 @@ function renderPlatforms(placement, adId, enableUrl){
         badge = '<span class="inline-flex rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-400/20">IG targeted · no data yet</span>';
     }
 
-    const showEnable = (status === 'pending' || status === 'not_configured') && enableUrl;
-    const enableBtn = showEnable
-        ? '<form method="POST" action="' + enableUrl + '" class="m-0"><input type="hidden" name="_token" value="{{ csrf_token() }}"><button type="submit" class="text-[11px] font-semibold text-fuchsia-700 underline">Enable IG</button></form>'
-        : '';
-
-    return '<div class="space-y-1">' + targetLine + badge + enableBtn + '</div>';
+    return '<div class="space-y-1">' + targetLine + badge + '</div>';
 }
+
+
+/* =============================
+   MAIN REFRESH FUNCTION
+============================= */
 
 async function refreshAdsDashboard(){
 
@@ -445,6 +474,7 @@ async function refreshAdsDashboard(){
 
         clearTimeout(timeoutId);
 
+        const contentType = response.headers.get('content-type') || '';
         const raw = await response.text();
         let data;
 
@@ -462,6 +492,10 @@ async function refreshAdsDashboard(){
             throw new Error('Live refresh returned invalid payload');
         }
 
+        /* =============================
+           UPDATE METRICS
+        ============================= */
+
         const totalAds = document.getElementById('metric-total-ads');
         const activeAds = document.getElementById('metric-active-ads');
         const totalSpend = document.getElementById('metric-total-spend');
@@ -469,13 +503,17 @@ async function refreshAdsDashboard(){
 
         if(totalAds) totalAds.textContent = number(data.metrics.total_ads);
         if(activeAds) activeAds.textContent = number(data.metrics.active_ads);
-        if(totalSpend) totalSpend.textContent = money(data.metrics.lifetime_spend ?? data.metrics.total_spend);
+        if(totalSpend) totalSpend.textContent = money(data.metrics.total_spend);
         if(totalClicks) totalClicks.textContent = number(data.metrics.total_clicks);
+
+
+        /* =============================
+           UPDATE TABLE ROWS
+        ============================= */
 
         data.ads.forEach(ad => {
 
             const imp = document.getElementById('imp-'+ad.id);
-            const igImp = document.getElementById('ig-imp-'+ad.id);
             const clk = document.getElementById('clk-'+ad.id);
             const ctr = document.getElementById('ctr-'+ad.id);
             const spn = document.getElementById('spend-'+ad.id);
@@ -484,13 +522,9 @@ async function refreshAdsDashboard(){
             const plt = document.getElementById('platforms-'+ad.id);
 
             if(imp) imp.textContent = number(ad.impressions);
-            if(igImp) {
-                const ig = ad.instagram_impressions ?? (ad.placement && ad.placement.instagram_impressions) ?? 0;
-                igImp.textContent = number(ig);
-            }
             if(clk) clk.textContent = number(ad.clicks);
             if(ctr) ctr.innerHTML = renderCtr(ad.ctr);
-            if(spn) spn.textContent = money(ad.lifetime_spend ?? ad.spend);
+            if(spn) spn.textContent = money(ad.spend);
             if(tdy) tdy.textContent = money(ad.daily_spend);
 
             if(sts){
@@ -498,7 +532,7 @@ async function refreshAdsDashboard(){
             }
 
             if(plt && ad.placement){
-                plt.innerHTML = renderPlatforms(ad.placement, ad.id, ad.enable_instagram_url || '');
+                plt.innerHTML = renderPlatforms(ad.placement);
             }
 
         });
@@ -524,6 +558,11 @@ async function refreshAdsDashboard(){
 
 }
 
+
+/* =============================
+   START
+============================= */
+
 refreshAdsDashboard();
 
 setInterval(refreshAdsDashboard, REFRESH_MS);
@@ -533,6 +572,7 @@ document.addEventListener('visibilitychange', function(){
         refreshAdsDashboard();
     }
 });
+
 
 })();
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Verify Page ↔ Instagram, then update all existing ad sets, creatives, and ads on Meta.
+# WABA only — uses this app's .env (META_AD_ACCOUNT_ID, META_PAGE_ID, META_INSTAGRAM_USER_ID).
+# Do not copy credentials from xanderbot; they use separate Meta ad accounts.
 set -euo pipefail
 
-cd /var/www/xanderbot
+cd "$(dirname "$0")/.."
 
 php artisan config:clear
 php artisan optimize:clear

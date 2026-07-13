@@ -228,10 +228,6 @@ Selected countries and/or specific cities
 
 </select>
 
-<p class="mt-2 text-sm text-slate-500">
-Choose whole countries, or pick cities within a country. Countries with selected cities are targeted at city level only.
-</p>
-
 </div>
 
 
@@ -246,11 +242,21 @@ name="countries[]"
 multiple
 id="country-select"
 class="w-full border rounded-xl px-4 py-3"
-required></select>
+required>
 
-<p class="mt-2 text-sm text-slate-500">
-Search Meta countries by name (e.g. Rwanda, Kenya, United States).
-</p>
+@foreach($countries as $code => $country)
+
+<option
+value="{{ $code }}"
+@selected(in_array($code,old('countries',$adset->countries ?? [])))>
+
+{{ $country }}
+
+</option>
+
+@endforeach
+
+</select>
 
 </div>
 
@@ -271,10 +277,6 @@ type="hidden"
 name="cities_json"
 id="cities-json"
 value="{{ old('cities_json', json_encode($adset->cities ?? [])) }}">
-
-<p class="mt-2 text-sm text-slate-500">
-Search worldwide cities. Select one or more countries first to narrow results.
-</p>
 
 </div>
 
@@ -319,12 +321,6 @@ name="interests[]"
 id="interest-select"
 multiple
 class="w-full border rounded-xl px-4 py-3"></select>
-
-<p class="mt-2 text-sm text-slate-500">
-Type at least 2 characters to search existing Meta interests (max 5).
-</p>
-
-<input type="hidden" name="interests_json" id="interests-json" value="{{ old('interests_json', json_encode($interestOptions ?? [])) }}">
 
 </div>
 
@@ -450,53 +446,7 @@ Delete
 
 <script>
 
-@php
-    $initialCountries = collect(old('countries', $adset->countries ?? []))->map(function ($code) use ($countries) {
-        $code = strtoupper((string) $code);
-        $label = $countries[$code] ?? $code;
-
-        return [
-            'code' => $code,
-            'name' => $label . ' (' . $code . ')',
-        ];
-    })->values();
-@endphp
-
-const initialCountries = @json($initialCountries);
-
-const countrySelect = new TomSelect("#country-select", {
-    plugins: ['remove_button'],
-    valueField: 'code',
-    labelField: 'name',
-    searchField: ['name', 'code'],
-    placeholder: 'Search countries...',
-    create: false,
-    options: initialCountries,
-    items: initialCountries.map(country => country.code),
-    load: function(query, callback) {
-        if (query.length < 2) return callback();
-
-        const params = new URLSearchParams({
-            q: query,
-            type: 'country',
-        });
-
-        fetch("/admin/meta/geo?" + params.toString())
-            .then(res => res.json())
-            .then(data => {
-                callback((data.data ?? []).map(item => {
-                    const code = String(item.country_code || item.key || '').toUpperCase();
-
-                    return {
-                        code,
-                        name: item.name + (code ? ' (' + code + ')' : ''),
-                    };
-                }).filter(item => item.code));
-            })
-            .catch(() => callback());
-    },
-});
-
+const countrySelect = new TomSelect("#country-select",{plugins:['remove_button']});
 new TomSelect("#gender-select",{plugins:['remove_button']});
 new TomSelect("#language-select",{plugins:['remove_button']});
 new TomSelect("#platform-select",{plugins:['remove_button']});
@@ -604,60 +554,34 @@ countrySelect.on("change", () => citySelect.clearOptions());
 toggleCitySection();
 syncCitiesJson();
 
-let interestSelect = new TomSelect("#interest-select", {
-    plugins: ['remove_button'],
-    valueField: 'id',
-    labelField: 'name',
-    searchField: ['name'],
-    maxItems: 5,
-    create: false,
-    placeholder: 'Search interests...',
-    load: function(query, callback) {
-        if (query.length < 2) return callback();
+let interestSelect = new TomSelect("#interest-select",{
 
-        fetch("/admin/meta/interests?q=" + encodeURIComponent(query))
-            .then(res => res.json())
-            .then(data => callback(data.data ?? []))
-            .catch(() => callback());
-    },
-    onItemAdd: function(value) {
-        const option = this.options[value];
-        if (!option || selectedInterests.some(interest => interest.id === value)) {
-            return;
-        }
+plugins:['remove_button'],
+valueField:'id',
+labelField:'name',
+searchField:'name',
 
-        selectedInterests.push({
-            id: value,
-            name: option.name || value,
-        });
-        syncInterestsJson();
-    },
-    onItemRemove: function(value) {
-        selectedInterests = selectedInterests.filter(interest => interest.id !== value);
-        syncInterestsJson();
-    },
-});
+load:function(query,callback){
 
-const interestsJsonInput = document.getElementById("interests-json");
-let selectedInterests = [];
+if(query.length < 2) return callback();
 
-try {
-    selectedInterests = JSON.parse(interestsJsonInput.value || "[]");
-    if (!Array.isArray(selectedInterests)) selectedInterests = [];
-} catch (e) {
-    selectedInterests = [];
+fetch("/admin/meta/interests?q="+query)
+.then(res=>res.json())
+.then(data=>callback(data.data ?? []))
+.catch(()=>callback());
+
 }
 
-function syncInterestsJson() {
-    interestsJsonInput.value = JSON.stringify(selectedInterests);
-}
-
-selectedInterests.forEach(function(interest) {
-    interestSelect.addOption(interest);
-    interestSelect.addItem(interest.id);
 });
 
-syncInterestsJson();
+let existingInterests = @json($adset->interests ?? []);
+
+existingInterests.forEach(function(id){
+
+interestSelect.addOption({id:id,name:id});
+interestSelect.addItem(id);
+
+});
 
 document.getElementById("placement-type")
 .addEventListener("change",function(){
@@ -672,10 +596,8 @@ section.classList.add("hidden");
 
 });
 
-document.getElementById("adsetForm")
-.addEventListener("submit", function() {
+document.querySelector("form").addEventListener("submit", function() {
     syncCitiesJson();
-    syncInterestsJson();
 });
 
 </script>

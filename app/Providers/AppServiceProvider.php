@@ -11,7 +11,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->singleton(\App\Services\Tenant\TenantConnectionResolver::class);
     }
 
     /**
@@ -19,15 +19,21 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        $logDir = storage_path('logs');
-        if (! is_dir($logDir)) {
-            @mkdir($logDir, 0775, true);
+        $this->ensureWebhookLogFileExists();
+    }
+
+    /**
+     * Create storage/logs/webhook.log on deploy so `tail -f` works before the first event.
+     */
+    private function ensureWebhookLogFileExists(): void
+    {
+        $path = storage_path('logs/webhook.log');
+        $dir = dirname($path);
+        if (! is_dir($dir)) {
+            @mkdir($dir, 0755, true);
         }
-        foreach (['webhook-hits.log', 'webhook.log', 'laravel.log'] as $name) {
-            $path = $logDir.DIRECTORY_SEPARATOR.$name;
-            if (! is_file($path)) {
-                @touch($path);
-            }
+        if (! is_file($path) && is_writable($dir)) {
+            @file_put_contents($path, '');
         }
     }
 }

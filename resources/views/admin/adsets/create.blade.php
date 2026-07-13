@@ -62,8 +62,7 @@ required>
 
 <option
 value="{{ $campaign->id }}"
-data-objective="{{ $campaign->objective }}"
-@if((string) old('campaign_id', $selectedCampaign ?? '') === (string) $campaign->id) selected @endif>
+data-objective="{{ $campaign->objective }}">
 
 {{ $campaign->name }} ({{ $campaign->objective }})
 
@@ -116,23 +115,28 @@ Minimum recommended: $5/day
 
 
 
-{{-- OPTIMIZATION (auto-detected from campaign objective) --}}
+{{-- OPTIMIZATION --}}
 <div class="mb-6">
 
 <label class="font-semibold block mb-2">
-Performance Goal
+Optimization Goal
 </label>
 
-<input type="hidden" name="optimization_goal" id="optimization-goal" value="{{ old('optimization_goal', 'LANDING_PAGE_VIEWS') }}">
+<select
+name="optimization_goal"
+id="optimization-goal"
+class="w-full rounded-xl border border-slate-200 px-4 py-3 shadow-sm focus:border-xander-navy focus:ring-2 focus:ring-xander-navy/20"
+required>
 
-<div id="optimization-goal-display"
-class="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-Select a campaign to auto-detect the performance goal.
-</div>
+<option value="LINK_CLICKS">Link Clicks</option>
+<option value="LANDING_PAGE_VIEWS">Landing Page Views</option>
+<option value="REACH">Reach</option>
+<option value="IMPRESSIONS">Impressions</option>
+<option value="LEAD_GENERATION">Lead Generation</option>
+<option value="OFFSITE_CONVERSIONS">Conversions</option>
+<option value="POST_ENGAGEMENT">Post Engagement</option>
 
-<p class="text-xs text-gray-500 mt-1">
-Matched automatically to your campaign objective on Meta. If Meta rejects a goal, the server retries compatible alternatives.
-</p>
+</select>
 
 </div>
 
@@ -179,11 +183,12 @@ required>
 
 </select>
 
+<p class="mt-2 text-sm text-slate-500">
+Lead ad sets require the selected Page to accept Meta Lead Generation Terms.
+<a id="leadgen-tos-link" class="text-xander-navy underline" href="https://www.facebook.com/ads/leadgen/tos" target="_blank" rel="noopener">Accept terms here</a>.
+</p>
+
 </div>
-
-
-
-{{-- AGE --}}
 <div class="grid grid-cols-2 gap-4 mb-6">
 
 <div>
@@ -268,7 +273,7 @@ Selected countries and/or specific cities
 </select>
 
 <p class="mt-2 text-sm text-slate-500">
-Choose whole countries, or pick cities within a country (for example Kigali in Rwanda). Countries with selected cities are targeted at city level only.
+Choose whole countries, or pick cities within a country (for example Montreal in Canada). Countries with selected cities are targeted at city level only.
 </p>
 
 </div>
@@ -287,11 +292,17 @@ name="countries[]"
 multiple
 id="country-select"
 class="w-full rounded-xl border border-slate-200 px-4 py-3 shadow-sm focus:border-xander-navy focus:ring-2 focus:ring-xander-navy/20"
-required></select>
+required>
 
-<p class="mt-2 text-sm text-slate-500">
-Search Meta countries by name (e.g. Rwanda, Kenya, United States).
-</p>
+@foreach($countries as $code => $country)
+
+<option value="{{ $code }}" @selected(in_array($code, old('countries', [])))>
+{{ $country }}
+</option>
+
+@endforeach
+
+</select>
 
 </div>
 
@@ -312,7 +323,7 @@ class="w-full rounded-xl border border-slate-200 px-4 py-3 shadow-sm focus:borde
 <input type="hidden" name="cities_json" id="cities-json" value="{{ old('cities_json', '[]') }}">
 
 <p class="mt-2 text-sm text-slate-500">
-Search worldwide cities (e.g. Kigali, Bujumbura). Select one or more countries first to narrow results.
+Search worldwide cities (e.g. Montreal, London, Kigali). Select one or more countries first to narrow results.
 </p>
 
 </div>
@@ -360,10 +371,8 @@ multiple
 class="w-full border rounded-xl px-4 py-3"></select>
 
 <p class="mt-2 text-sm text-slate-500">
-Type at least 2 characters to search existing Meta interests (max 5).
+Optional. Deprecated interests are replaced automatically with Meta's suggested alternatives when needed.
 </p>
-
-<input type="hidden" name="interests_json" id="interests-json" value="{{ old('interests_json', '[]') }}">
 
 </div>
 
@@ -423,8 +432,8 @@ class="w-full rounded-xl border border-slate-200 px-4 py-3 shadow-sm focus:borde
 
 <div class="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
     <a href="{{ route('admin.adsets.index') }}" class="text-center text-sm font-semibold text-slate-600 transition hover:text-xander-navy sm:text-left">Cancel</a>
-    <button type="submit" class="inline-flex w-full items-center justify-center rounded-xl bg-xander-navy px-8 py-3 font-semibold text-white shadow-sm transition hover:bg-xander-secondary sm:w-auto">
-        Create ad set
+    <button type="submit" id="adset-submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-xander-navy px-8 py-3 font-semibold text-white shadow-sm transition hover:bg-xander-secondary sm:w-auto">
+        <span id="adset-submit-label">Create ad set</span>
     </button>
 </div>
 
@@ -440,53 +449,7 @@ class="w-full rounded-xl border border-slate-200 px-4 py-3 shadow-sm focus:borde
 
 <script>
 
-@php
-    $initialCountries = collect(old('countries', []))->map(function ($code) use ($countries) {
-        $code = strtoupper((string) $code);
-        $label = $countries[$code] ?? $code;
-
-        return [
-            'code' => $code,
-            'name' => $label . ' (' . $code . ')',
-        ];
-    })->values();
-@endphp
-
-const initialCountries = @json($initialCountries);
-
-const countrySelect = new TomSelect("#country-select", {
-    plugins: ['remove_button'],
-    valueField: 'code',
-    labelField: 'name',
-    searchField: ['name', 'code'],
-    placeholder: 'Search countries...',
-    create: false,
-    options: initialCountries,
-    items: initialCountries.map(country => country.code),
-    load: function(query, callback) {
-        if (query.length < 2) return callback();
-
-        const params = new URLSearchParams({
-            q: query,
-            type: 'country',
-        });
-
-        fetch("/admin/meta/geo?" + params.toString())
-            .then(res => res.json())
-            .then(data => {
-                callback((data.data ?? []).map(item => {
-                    const code = String(item.country_code || item.key || '').toUpperCase();
-
-                    return {
-                        code,
-                        name: item.name + (code ? ' (' + code + ')' : ''),
-                    };
-                }).filter(item => item.code));
-            })
-            .catch(() => callback());
-    },
-});
-
+const countrySelect = new TomSelect("#country-select",{plugins:['remove_button']});
 new TomSelect("#gender-select",{plugins:['remove_button']});
 new TomSelect("#language-select",{plugins:['remove_button']});
 new TomSelect("#platform-select",{plugins:['remove_button']});
@@ -594,79 +557,50 @@ countrySelect.on("change", () => citySelect.clearOptions());
 toggleCitySection();
 syncCitiesJson();
 
+const pageSelect = document.querySelector("[name='page_id']");
+const leadgenTosLink = document.getElementById("leadgen-tos-link");
 
-
-let interestSelect = new TomSelect("#interest-select", {
-    plugins: ['remove_button'],
-    valueField: 'id',
-    labelField: 'name',
-    searchField: ['name'],
-    maxItems: 5,
-    create: false,
-    placeholder: 'Search interests...',
-    load: function(query, callback) {
-        if (query.length < 2) return callback();
-
-        fetch("/admin/meta/interests?q=" + encodeURIComponent(query))
-            .then(res => res.json())
-            .then(data => callback(data.data ?? []))
-            .catch(() => callback());
-    },
-    onItemAdd: function(value) {
-        const option = this.options[value];
-        if (!option || selectedInterests.some(interest => interest.id === value)) {
-            return;
-        }
-
-        selectedInterests.push({
-            id: value,
-            name: option.name || value,
-        });
-        syncInterestsJson();
-    },
-    onItemRemove: function(value) {
-        selectedInterests = selectedInterests.filter(interest => interest.id !== value);
-        syncInterestsJson();
-    },
-});
-
-const interestsJsonInput = document.getElementById("interests-json");
-let selectedInterests = [];
-
-try {
-    selectedInterests = JSON.parse(interestsJsonInput.value || "[]");
-    if (!Array.isArray(selectedInterests)) selectedInterests = [];
-} catch (e) {
-    selectedInterests = [];
+function updateLeadgenTosLink() {
+    if (!pageSelect || !leadgenTosLink) return;
+    const pageId = pageSelect.value;
+    leadgenTosLink.href = pageId
+        ? "https://www.facebook.com/ads/leadgen/tos?page_id=" + encodeURIComponent(pageId)
+        : "https://www.facebook.com/ads/leadgen/tos";
 }
 
-function syncInterestsJson() {
-    interestsJsonInput.value = JSON.stringify(selectedInterests);
+if (pageSelect) {
+    pageSelect.addEventListener("change", updateLeadgenTosLink);
+    updateLeadgenTosLink();
 }
 
-selectedInterests.forEach(function(interest) {
-    interestSelect.addOption(interest);
-    interestSelect.addItem(interest.id);
+
+
+let interestSelect = new TomSelect("#interest-select",{
+
+plugins:['remove_button'],
+valueField:'id',
+labelField:'name',
+searchField:'name',
+
+load:function(query,callback){
+
+if(query.length < 2) return callback();
+
+fetch("/admin/meta/interests?q="+query)
+.then(res=>res.json())
+.then(data=>callback(data.data ?? []))
+.catch(()=>callback());
+
+}
+
 });
 
-syncInterestsJson();
 
-
-
-const goalLabels = {
-LINK_CLICKS: "Link Clicks",
-LANDING_PAGE_VIEWS: "Landing Page Views",
-REACH: "Reach",
-IMPRESSIONS: "Impressions",
-LEAD_GENERATION: "Lead Generation",
-OFFSITE_CONVERSIONS: "Conversions",
-POST_ENGAGEMENT: "Post Engagement",
-APP_INSTALLS: "App Installs"
-};
 
 const rules = {
-TRAFFIC: "LANDING_PAGE_VIEWS",
-OUTCOME_TRAFFIC: "LANDING_PAGE_VIEWS",
+
+TRAFFIC: "LINK_CLICKS",
+OUTCOME_TRAFFIC: "LINK_CLICKS",
 AWARENESS: "REACH",
 OUTCOME_AWARENESS: "REACH",
 ENGAGEMENT: "POST_ENGAGEMENT",
@@ -674,38 +608,27 @@ OUTCOME_ENGAGEMENT: "POST_ENGAGEMENT",
 LEADS: "LEAD_GENERATION",
 OUTCOME_LEADS: "LEAD_GENERATION",
 SALES: "OFFSITE_CONVERSIONS",
-OUTCOME_SALES: "OFFSITE_CONVERSIONS",
-APP_PROMOTION: "APP_INSTALLS",
-OUTCOME_APP_PROMOTION: "APP_INSTALLS"
+OUTCOME_SALES: "OFFSITE_CONVERSIONS"
+
 };
 
-function applyOptimizationGoalForCampaign(selectEl){
-const option = selectEl.selectedOptions[0];
-const obj = option?.dataset?.objective || "";
-const goalInput = document.getElementById("optimization-goal");
-const goalDisplay = document.getElementById("optimization-goal-display");
-const info = document.getElementById("objective-info");
 
-if(!obj){
-goalInput.value = "LANDING_PAGE_VIEWS";
-goalDisplay.innerText = "Select a campaign to auto-detect the performance goal.";
-info.classList.add("hidden");
-return;
-}
 
-const goal = rules[obj] ?? "LANDING_PAGE_VIEWS";
-goalInput.value = goal;
-goalDisplay.innerText = (goalLabels[goal] ?? goal) + " (for " + obj + ")";
-info.classList.remove("hidden");
-info.innerText = "Performance goal auto-selected for " + obj + ". Server will retry other compatible goals if Meta rejects this one.";
-}
+document.getElementById("campaign-select")
+.addEventListener("change",function(){
 
-const campaignSelect = document.getElementById("campaign-select");
-campaignSelect.addEventListener("change", function(){
-applyOptimizationGoalForCampaign(this);
+let obj = this.selectedOptions[0].dataset.objective;
+
+let goal = rules[obj] ?? "LINK_CLICKS";
+
+document.getElementById("optimization-goal").value = goal;
+
+document.getElementById("objective-info").classList.remove("hidden");
+
+document.getElementById("objective-info").innerText =
+"Optimization automatically configured for "+obj;
+
 });
-
-applyOptimizationGoalForCampaign(campaignSelect);
 
 
 
@@ -732,7 +655,6 @@ document.getElementById("adsetForm")
 .addEventListener("submit",function(e){
 
 syncCitiesJson();
-syncInterestsJson();
 
 let min=parseInt(document.querySelector("[name='age_min']").value);
 let max=parseInt(document.querySelector("[name='age_max']").value);
@@ -742,7 +664,16 @@ if(min >= max){
 e.preventDefault();
 
 alert("Minimum age cannot be greater than maximum age");
+return;
+}
 
+const submitBtn = document.getElementById("adset-submit-btn");
+const submitLabel = document.getElementById("adset-submit-label");
+
+if (submitBtn && submitLabel) {
+    submitBtn.disabled = true;
+    submitBtn.classList.add("opacity-70", "cursor-wait");
+    submitLabel.textContent = "Creating ad set…";
 }
 
 });

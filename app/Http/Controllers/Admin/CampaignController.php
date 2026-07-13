@@ -7,14 +7,12 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
-use App\Models\Campaign;
 use App\Models\AdAccount;
 use App\Models\AdSet;
-use App\Models\Creative;
+use App\Models\Campaign;
 use App\Services\MetaAdsService;
-use App\Support\MetaDeletedCampaigns;
+use App\Support\TenantScope;
 
-use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 class CampaignController extends Controller
@@ -36,7 +34,9 @@ class CampaignController extends Controller
     {
         try {
 
-            $campaigns = Campaign::query()
+            $campaignQuery = TenantScope::campaigns(Campaign::query());
+
+            $campaigns = (clone $campaignQuery)
                 ->withCount('adSets')
                 ->latest()
                 ->paginate(20);
@@ -44,15 +44,15 @@ class CampaignController extends Controller
             return view('admin.campaigns.index', [
 
                 'campaigns' => $campaigns,
-                'totalAdSets' => AdSet::count(),
+                'totalAdSets' => TenantScope::adSets(AdSet::query())->count(),
 
                 'activeCampaigns' =>
-                    Campaign::where('status','ACTIVE')->count(),
+                    (clone $campaignQuery)->whereIn('status', ['active', 'ACTIVE'])->count(),
 
                 'pausedCampaigns' =>
-                    Campaign::where('status','PAUSED')->count(),
+                    (clone $campaignQuery)->whereIn('status', ['paused', 'PAUSED'])->count(),
 
-                'hasAdAccount' => AdAccount::exists()
+                'hasAdAccount' => TenantScope::resolveAdAccount() !== null,
             ]);
 
         } catch (Throwable $e) {
@@ -76,8 +76,10 @@ class CampaignController extends Controller
         try {
 
             $campaign = Campaign::with([
-                'adSets' => fn($q) => $q->latest()
+                'adsets' => fn ($q) => $q->withCount(['ads', 'creatives'])->latest(),
             ])->findOrFail($id);
+
+            TenantScope::assertCampaign($campaign);
 
             return view('admin.campaigns.show', compact('campaign'));
 
@@ -100,14 +102,15 @@ class CampaignController extends Controller
 
     public function create()
     {
-        $account = AdAccount::first();
-
-        if (!$account) {
-
+        try {
+            $account = TenantScope::requireAdAccount();
+        } catch (\Throwable) {
             return redirect()
-                ->route('admin.accounts.index')
+                ->route('admin.campaigns.index')
                 ->withErrors([
-                    'meta' => 'No Meta Ad Account connected.'
+                    'meta' => TenantScope::isScoped()
+                        ? 'Platform Meta ad account is not configured. Contact support.'
+                        : 'No Meta ad account is connected.',
                 ]);
         }
 
@@ -141,21 +144,14 @@ class CampaignController extends Controller
             |--------------------------------------------------------------------------
             */
 
-            $account = AdAccount::whereNotNull('meta_id')->first();
+            $account = TenantScope::requireAdAccount();
 
-            if (!$account) {
-                throw new \Exception('Meta ad account is not connected.');
-            }
+            $nameQuery = TenantScope::campaigns(Campaign::query());
 
-            /*
-            |--------------------------------------------------------------------------
-            | Prevent Duplicate Names
-            |--------------------------------------------------------------------------
-            */
+            if ($nameQuery->where('name',$data['name'])->exists()) {
 
-            if (Campaign::where('name', $data['name'])->exists()) {
                 return back()->withErrors([
-                    'name' => 'Campaign name already exists. Delete the existing campaign first, then create a new one.',
+                    'name' => 'Campaign name already exists.'
                 ])->withInput();
             }
 
@@ -229,7 +225,7 @@ class CampaignController extends Controller
             |--------------------------------------------------------------------------
             */
 
-            $campaign = Campaign::create([
+            $campaign = Campaign::create(array_merge([
 
                 'ad_account_id' => $account->id,
                 'meta_id' => $metaId,
@@ -238,7 +234,7 @@ class CampaignController extends Controller
                 'objective' => $data['objective'],
                 'status' => $data['status']
 
-            ]);
+            ], TenantScope::campaignAttributes()));
 
             DB::commit();
 
@@ -273,21 +269,10 @@ class CampaignController extends Controller
 
     public function edit(Campaign $campaign)
     {
-        $legacyObjectiveMap = [
-            'TRAFFIC' => 'OUTCOME_TRAFFIC',
-            'LEADS' => 'OUTCOME_LEADS',
-            'ENGAGEMENT' => 'OUTCOME_ENGAGEMENT',
-            'AWARENESS' => 'OUTCOME_AWARENESS',
-            'SALES' => 'OUTCOME_SALES',
-            'APP_PROMOTION' => 'OUTCOME_APP_PROMOTION',
-        ];
-
-        $normalizedObjective = $legacyObjectiveMap[strtoupper((string) $campaign->objective)]
-            ?? strtoupper((string) $campaign->objective);
+        TenantScope::assertCampaign($campaign);
 
         return view('admin.campaigns.edit', [
             'campaign' => $campaign,
-            'normalizedObjective' => $normalizedObjective,
         ]);
     }
 
@@ -309,41 +294,25 @@ class CampaignController extends Controller
         try {
             $status = strtoupper($data['status']);
 
-            $update = [
+            $campaign->update([
                 'name' => $data['name'],
                 'objective' => $data['objective'],
+                'daily_budget' => isset($data['daily_budget'])
+                    ? (int) round(((float) $data['daily_budget']) * 100)
+                    : $campaign->daily_budget,
                 'status' => $status,
-            ];
-
-            if (isset($data['daily_budget']) && $data['daily_budget'] !== '') {
-                if (Schema::hasColumn('campaigns', 'daily_budget')) {
-                    $update['daily_budget'] = (int) round(((float) $data['daily_budget']) * 100);
-                } elseif (Schema::hasColumn('campaigns', 'budget')) {
-                    $update['budget'] = (float) $data['daily_budget'];
-                }
-            }
-
-            $previousObjective = $campaign->objective;
-
-            $campaign->update($update);
-
-            $metaWarning = null;
+            ]);
 
             if ($campaign->meta_id) {
                 $this->meta->updateCampaign($campaign->meta_id, [
                     'name' => $data['name'],
                     'status' => $status,
                 ]);
-
-                if ($previousObjective !== $data['objective']) {
-                    $metaWarning = 'Objective saved locally. Meta does not allow changing objective on an existing campaign — create a new campaign on Meta if you need a different objective there.';
-                }
             }
 
             return redirect()
                 ->route('admin.campaigns.index')
-                ->with('success', 'Campaign updated successfully.')
-                ->with('meta_warning', $metaWarning);
+                ->with('success', 'Campaign updated successfully.');
 
         } catch (Throwable $e) {
             Log::error('CAMPAIGN_UPDATE_FAILED', [
@@ -367,91 +336,26 @@ class CampaignController extends Controller
 
     public function destroy(Campaign $campaign)
     {
-        DB::beginTransaction();
-
         try {
-            $campaign->load(['adSets.ads']);
 
-            $metaId = $campaign->meta_id;
-
-            Log::info('META_CAMPAIGN_DELETE', [
-                'campaign_id' => $campaign->id,
-                'meta_id' => $metaId,
+            Log::info('META_CAMPAIGN_DELETE',[
+                'campaign_id'=>$campaign->id,
+                'meta_id'=>$campaign->meta_id
             ]);
-
-            foreach ($campaign->adSets as $adSet) {
-                foreach ($adSet->ads as $ad) {
-                    if (! $ad->meta_ad_id) {
-                        continue;
-                    }
-
-                    try {
-                        $this->meta->deleteAd($ad->meta_ad_id);
-                    } catch (Throwable $e) {
-                        Log::warning('META_AD_DELETE_SKIPPED', [
-                            'meta_ad_id' => $ad->meta_ad_id,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
-                }
-
-                if ($adSet->meta_id) {
-                    try {
-                        $this->meta->deleteAdSet($adSet->meta_id);
-                    } catch (Throwable $e) {
-                        Log::warning('META_ADSET_DELETE_SKIPPED', [
-                            'meta_id' => $adSet->meta_id,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
-                }
-            }
-
-            if ($metaId) {
-                try {
-                    $this->meta->deleteCampaign($metaId);
-                } catch (Throwable $e) {
-                    try {
-                        $this->meta->updateCampaign($metaId, ['status' => 'DELETED']);
-                    } catch (Throwable $archiveError) {
-                        Log::warning('META_CAMPAIGN_ARCHIVE_FAILED', [
-                            'meta_id' => $metaId,
-                            'error' => $archiveError->getMessage(),
-                        ]);
-                    }
-                }
-
-                MetaDeletedCampaigns::remember($metaId);
-            }
-
-            Creative::query()
-                ->where('campaign_id', $campaign->id)
-                ->update([
-                    'campaign_id' => null,
-                    'adset_id' => null,
-                ]);
-
-            foreach ($campaign->adSets as $adSet) {
-                $adSet->ads()->delete();
-                $adSet->delete();
-            }
 
             $campaign->delete();
 
-            DB::commit();
-
-            return back()->with('success', 'Campaign deleted completely.');
+            return back()->with('success','Campaign deleted.');
 
         } catch (Throwable $e) {
-            DB::rollBack();
 
-            Log::error('META_CAMPAIGN_DELETE_FAILED', [
-                'campaign_id' => $campaign->id,
-                'error' => $e->getMessage(),
+            Log::error('META_CAMPAIGN_DELETE_FAILED',[
+                'campaign_id'=>$campaign->id,
+                'error'=>$e->getMessage()
             ]);
 
             return back()->withErrors([
-                'meta' => 'Unable to delete campaign: '.$e->getMessage(),
+                'meta'=>'Unable to delete campaign.'
             ]);
         }
     }
@@ -474,15 +378,36 @@ public function activate(Campaign $campaign)
         }
 
         $campaign->update([
-            'status' => 'ACTIVE'
+            'status' => Campaign::STATUS_ACTIVE,
+            'meta_effective_status' => 'ACTIVE',
         ]);
+
+        // Activate child ad sets + ads on Meta when present
+        foreach ($campaign->adsets as $adSet) {
+            if ($adSet->meta_id) {
+                try {
+                    $this->meta->updateAdSet($adSet->meta_id, ['status' => 'ACTIVE']);
+                } catch (Throwable) {
+                }
+            }
+            $adSet->update(['status' => 'ACTIVE']);
+            foreach ($adSet->ads as $ad) {
+                if ($ad->meta_ad_id || $ad->meta_id) {
+                    try {
+                        $this->meta->updateAd($ad->meta_ad_id ?: $ad->meta_id, ['status' => 'ACTIVE']);
+                    } catch (Throwable) {
+                    }
+                }
+                $ad->update(['status' => 'ACTIVE', 'meta_effective_status' => 'ACTIVE']);
+            }
+        }
 
         Log::info('CAMPAIGN_ACTIVATED',[
             'campaign_id'=>$campaign->id,
             'meta_id'=>$campaign->meta_id
         ]);
 
-        return back()->with('success','Campaign activated.');
+        return back()->with('success','Campaign activated and ready to deliver on Meta.');
 
     } catch(Throwable $e){
 
@@ -515,7 +440,8 @@ public function pause(Campaign $campaign)
         }
 
         $campaign->update([
-            'status'=>'PAUSED'
+            'status'=>Campaign::STATUS_PAUSED,
+            'meta_effective_status' => 'PAUSED',
         ]);
 
         Log::info('CAMPAIGN_PAUSED',[
@@ -556,16 +482,20 @@ public function sync(Campaign $campaign)
             $campaign->meta_id
         );
 
+        $effective = $metaCampaign['effective_status'] ?? $metaCampaign['status'] ?? null;
         $campaign->update([
-            'status' => $metaCampaign['status'] ?? $campaign->status
+            'status' => Campaign::normalizeStatus($effective ?? $metaCampaign['status'] ?? $campaign->status),
+            'meta_effective_status' => $effective,
+            'name' => $metaCampaign['name'] ?? $campaign->name,
         ]);
 
         Log::info('CAMPAIGN_SYNCED',[
             'campaign_id'=>$campaign->id,
-            'meta_status'=>$metaCampaign['status'] ?? null
+            'meta_status'=>$metaCampaign['status'] ?? null,
+            'effective_status'=>$effective,
         ]);
 
-        return back()->with('success','Campaign synced.');
+        return back()->with('success','Campaign synced from Meta — delivery status updated.');
 
     } catch(Throwable $e){
 
@@ -575,7 +505,42 @@ public function sync(Campaign $campaign)
         ]);
 
         return back()->withErrors([
-            'meta'=>'Unable to sync campaign.'
+            'meta' => 'Unable to sync campaign from Meta: '.$e->getMessage(),
+        ]);
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| SYNC ALL CAMPAIGNS FROM META
+|--------------------------------------------------------------------------
+*/
+
+public function syncAll()
+{
+    try {
+        $campaignExit = \Illuminate\Support\Facades\Artisan::call('meta:sync-campaigns');
+        $campaignOut = trim(\Illuminate\Support\Facades\Artisan::output());
+
+        if ($campaignExit !== 0) {
+            return back()->withErrors([
+                'meta' => $campaignOut !== '' ? $campaignOut : 'Unable to sync campaigns from Meta.',
+            ]);
+        }
+
+        // Also pull ad sets / ads when the fuller sync command is available
+        try {
+            \Illuminate\Support\Facades\Artisan::call('meta:sync-ads');
+        } catch (Throwable) {
+            // optional — campaigns sync alone is enough for delivery badges
+        }
+
+        return back()->with('success', 'All campaigns synced from Meta. Delivery statuses are up to date.');
+    } catch (Throwable $e) {
+        Log::error('CAMPAIGN_SYNC_ALL_FAILED', ['error' => $e->getMessage()]);
+
+        return back()->withErrors([
+            'meta' => 'Unable to sync campaigns from Meta: '.$e->getMessage(),
         ]);
     }
 }

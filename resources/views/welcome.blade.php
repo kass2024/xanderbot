@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Xander Global Scholars — Meta Ads management, AI WhatsApp automation, and analytics in one dashboard.">
+    <meta name="description" content="Parrot Canada Visa Consultant — Meta Ads management, AI WhatsApp automation, and analytics in one dashboard.">
 
-    <title>{{ config('app.name', 'Xander Global Scholars') }}</title>
+    <title>{{ config('app.name') }}</title>
 
     <link rel="icon" href="{{ asset('img/logo.png') }}">
 
@@ -24,11 +24,17 @@
                 <img src="{{ asset('img/logo.png') }}" alt="" class="h-full w-full object-contain" width="48" height="48">
             </span>
             <span class="min-w-0 text-left">
-                <span class="block truncate text-base font-bold tracking-tight text-xander-navy sm:text-lg">{{ config('app.name', 'Xander Global Scholars') }}</span>
+                <span class="block truncate text-base font-bold tracking-tight text-xander-navy sm:text-lg">{{ config('app.name') }}</span>
                 <span class="hidden text-xs font-medium text-slate-500 sm:block">Ads &amp; automation suite</span>
             </span>
         </a>
         <div class="flex shrink-0 items-center gap-2 sm:gap-3">
+            <a
+                href="#register"
+                class="hidden rounded-lg px-4 py-2.5 text-sm font-semibold text-xander-navy transition hover:bg-slate-100 sm:inline-flex"
+            >
+                Register
+            </a>
             <a
                 href="{{ route('login') }}"
                 class="inline-flex items-center justify-center rounded-lg bg-xander-navy px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-xander-secondary sm:px-5"
@@ -42,7 +48,7 @@
 <main>
     {{-- Hero — split layout like Meta Business Suite landing --}}
     <section class="relative overflow-hidden border-b border-slate-200/60 bg-white">
-        <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_70%_-10%,rgba(1,47,107,0.08),transparent)]"></div>
+        <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_70%_-10%,rgba(66,116,49,0.12),transparent)]"></div>
         <div class="relative mx-auto grid max-w-6xl gap-12 px-4 py-14 sm:px-6 lg:grid-cols-2 lg:items-center lg:gap-16 lg:px-8 lg:py-20">
             <div>
                 <p class="mb-4 inline-flex items-center gap-2 rounded-full border border-xander-navy/15 bg-xander-navy/[0.06] px-3 py-1 text-xs font-semibold uppercase tracking-wide text-xander-navy">
@@ -63,10 +69,10 @@
                         Open dashboard
                     </a>
                     <a
-                        href="{{ route('login') }}"
+                        href="#register"
                         class="inline-flex items-center justify-center rounded-xl border-2 border-slate-200 bg-white px-6 py-3.5 text-base font-semibold text-xander-navy transition hover:border-xander-navy/30 hover:bg-slate-50"
                     >
-                        Sign in
+                        Create account
                     </a>
                 </div>
                 <ul class="mt-10 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-500">
@@ -182,9 +188,106 @@
         </div>
     </section>
 
+    {{-- Smart registration --}}
+    <section id="register" class="border-b border-slate-200/60 bg-slate-50 py-16 sm:py-20">
+        <div class="mx-auto grid max-w-6xl gap-10 px-4 sm:px-6 lg:grid-cols-2 lg:items-start lg:gap-16 lg:px-8">
+            <div>
+                <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-xander-navy">Get started</p>
+                <h2 class="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Create your business workspace</h2>
+                <p class="mt-4 text-slate-600 leading-relaxed">
+                    Register your business, choose your Facebook Page, and set the WhatsApp number
+                    where ad leads should arrive. Publishing is powered by the main Parrot Canada Meta account.
+                </p>
+                <ul class="mt-6 space-y-2 text-sm text-slate-600">
+                    <li class="flex items-start gap-2"><span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-xander-gold"></span>Search your Facebook Page by name — never exposed in a public list</li>
+                    <li class="flex items-start gap-2"><span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-xander-gold"></span>Your business WhatsApp as click-to-chat destination</li>
+                    <li class="flex items-start gap-2"><span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-xander-gold"></span>Platform main account controls API access</li>
+                </ul>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+                @if($errors->any())
+                    <div class="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                        <ul class="space-y-1">
+                            @foreach($errors->all() as $error)
+                                <li>{{ $error }}</li>
+                            @endforeach
+                        </ul>
+                    </div>
+                @endif
+
+                @error('registration_error')
+                    <div class="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                        {{ $message }}
+                    </div>
+                @enderror
+
+                <form method="POST" action="{{ route('register') }}" class="space-y-4">
+                    @csrf
+
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700" for="company_name">Business name</label>
+                        <input id="company_name" name="company_name" type="text" value="{{ old('company_name') }}" required
+                            class="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm focus:border-xander-navy focus:ring focus:ring-xander-navy/20">
+                    </div>
+
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700" for="name">Your full name</label>
+                        <input id="name" name="name" type="text" value="{{ old('name') }}" required
+                            class="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm focus:border-xander-navy focus:ring focus:ring-xander-navy/20">
+                    </div>
+
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700" for="email">Work email</label>
+                        <input id="email" name="email" type="email" value="{{ old('email') }}" required
+                            class="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm focus:border-xander-navy focus:ring focus:ring-xander-navy/20">
+                    </div>
+
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700" for="phone">Phone (optional)</label>
+                        <input id="phone" name="phone" type="text" value="{{ old('phone') }}"
+                            class="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm focus:border-xander-navy focus:ring focus:ring-xander-navy/20">
+                    </div>
+
+                    <x-facebook-page-search
+                        :search-url="route('register.pages.search')"
+                        :initial-id="old('meta_page_id')"
+                        :initial-name="old('meta_page_name')"
+                        input-id="meta_page_search"
+                        label="Your Facebook Page"
+                        placeholder="Start typing your Facebook Page name…"
+                    />
+
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700" for="whatsapp_phone_number">Business WhatsApp number</label>
+                        <input id="whatsapp_phone_number" name="whatsapp_phone_number" type="text" required
+                            value="{{ old('whatsapp_phone_number') }}"
+                            placeholder="e.g. 14385551234 (country code, no +)"
+                            class="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm focus:border-xander-navy focus:ring focus:ring-xander-navy/20">
+                        <p class="mt-1 text-xs text-slate-500">Click-to-WhatsApp ads will send leads to this number. Meta will SMS a verification code after you register — the number is added to Business Manager under your business name.</p>
+                    </div>
+
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                        No separate Meta login needed — your WhatsApp number is verified and synced via the platform account under your registered business name.
+                    </div>
+
+                    <button type="submit"
+                        class="w-full rounded-xl bg-xander-navy px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-xander-navy/20 transition hover:bg-xander-secondary">
+                        Create account &amp; open ads workspace
+                    </button>
+
+                    <p class="text-center text-sm text-slate-500">
+                        Already registered?
+                        <a href="{{ route('login') }}" class="font-semibold text-xander-navy hover:underline">Sign in</a>
+                    </p>
+                </form>
+            </div>
+        </div>
+    </section>
+
     {{-- CTA band — brand gradient + gold button (PDF palette) --}}
     <section class="relative overflow-hidden bg-gradient-to-br from-xander-navy via-xander-secondary to-xander-accent py-16 sm:py-20">
-        <div class="pointer-events-none absolute inset-0 opacity-30 bg-[radial-gradient(circle_at_30%_20%,rgba(242,166,90,0.25),transparent_50%)]"></div>
+        <div class="pointer-events-none absolute inset-0 opacity-30 bg-[radial-gradient(circle_at_30%_20%,rgba(226,29,30,0.2),transparent_50%)]"></div>
         <div class="relative mx-auto max-w-3xl px-4 text-center sm:px-6">
             <h2 class="text-2xl font-bold text-white sm:text-3xl">Ready to work the way your team already does?</h2>
             <p class="mx-auto mt-4 max-w-xl text-base text-white/85">
@@ -192,7 +295,7 @@
             </p>
             <a
                 href="{{ route('login') }}"
-                class="mt-8 inline-flex items-center justify-center rounded-xl bg-xander-gold px-10 py-4 text-base font-bold text-xander-navy shadow-lg transition hover:brightness-105"
+                class="mt-8 inline-flex items-center justify-center rounded-xl bg-xander-gold px-10 py-4 text-base font-bold text-white shadow-lg transition hover:brightness-105"
             >
                 Log in to dashboard
             </a>
@@ -205,33 +308,19 @@
         <div class="flex items-center gap-3">
             <img src="{{ asset('img/logo.png') }}" alt="" class="h-9 w-9 object-contain opacity-90" width="36" height="36">
             <div class="text-left text-sm">
-                <p class="font-semibold text-white">{{ config('app.name', 'Xander Global Scholars') }}</p>
+                <p class="font-semibold text-white">{{ config('app.name') }}</p>
                 <p>&copy; {{ date('Y') }} All rights reserved.</p>
             </div>
         </div>
         <nav class="flex flex-wrap justify-center gap-x-8 gap-y-2 text-sm">
+            <a href="{{ route('login') }}" class="transition hover:text-white">Log in</a>
+            <a href="#register" class="transition hover:text-white">Register</a>
             <a href="/privacy-policy" class="transition hover:text-white">Privacy</a>
             <a href="/terms-of-service" class="transition hover:text-white">Terms</a>
             <a href="/data-deletion" class="transition hover:text-white">Data deletion</a>
-            <a href="https://wa.me/14389009784" target="_blank" class="flex items-center gap-2 transition hover:text-green-400">
-                <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.149-.67.149-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414-.074-.123-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/>
-                </svg>
-                WhatsApp Chat
-            </a>
         </nav>
     </div>
 </footer>
-
-<!-- WhatsApp Floating Chat Widget -->
-<a href="https://wa.me/14389009784" 
-   target="_blank" 
-   class="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-green-500 text-white shadow-lg transition-all hover:bg-green-600 hover:scale-110"
-   title="Chat with us on WhatsApp">
-    <svg class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
-        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.149-.67.149-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414-.074-.123-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/>
-    </svg>
-</a>
 
 </body>
 </html>

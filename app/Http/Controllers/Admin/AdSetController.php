@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Log;
 use App\Models\Campaign;
 use App\Models\AdSet;
 use App\Services\MetaAdsService;
+use App\Support\TenantScope;
 
 use Throwable;
 use Exception;
@@ -31,17 +32,20 @@ class AdSetController extends Controller
 
     public function index()
     {
-        $adsets = AdSet::with('campaign')
+        $adsetQuery = TenantScope::adSets(AdSet::query());
+
+        $adsets = (clone $adsetQuery)
+            ->with('campaign')
             ->latest()
             ->paginate(20);
 
         return view('admin.adsets.index', [
             'adsets' => $adsets,
             'adsetStats' => [
-                'total' => AdSet::count(),
-                'active' => AdSet::where('status', 'ACTIVE')->count(),
-                'paused' => AdSet::where('status', 'PAUSED')->count(),
-                'draft' => AdSet::where('status', 'DRAFT')->count(),
+                'total' => (clone $adsetQuery)->count(),
+                'active' => (clone $adsetQuery)->where('status', 'ACTIVE')->count(),
+                'paused' => (clone $adsetQuery)->where('status', 'PAUSED')->count(),
+                'draft' => (clone $adsetQuery)->where('status', 'DRAFT')->count(),
             ],
         ]);
     }
@@ -51,6 +55,8 @@ class AdSetController extends Controller
      */
     public function indexByCampaign(Campaign $campaign)
     {
+        TenantScope::assertCampaign($campaign);
+
         $campaignId = $campaign->id;
 
         $adsets = AdSet::query()
@@ -80,6 +86,8 @@ class AdSetController extends Controller
      */
     public function show(AdSet $adset)
     {
+        TenantScope::assertAdSet($adset);
+
         return redirect()->route('admin.adsets.edit', $adset);
     }
 
@@ -93,7 +101,7 @@ class AdSetController extends Controller
     {
         return view('admin.adsets.create', [
 
-            'campaigns' => Campaign::latest()->get(),
+            'campaigns' => TenantScope::campaigns(Campaign::query())->latest()->get(),
 
             'selectedCampaign' => $campaignId,
 
@@ -101,7 +109,7 @@ class AdSetController extends Controller
 
             'languages' => config('meta.languages'),
 
-            'pages' => $this->meta->getPages()
+            'pages' => TenantScope::filterPages($this->meta->getPages())
 
         ]);
     }
@@ -124,7 +132,7 @@ class AdSetController extends Controller
 
             'daily_budget' => 'required|numeric|min:5',
 
-            'optimization_goal' => 'nullable|string|in:LINK_CLICKS,LANDING_PAGE_VIEWS,REACH,IMPRESSIONS,LEAD_GENERATION,OFFSITE_CONVERSIONS,POST_ENGAGEMENT',
+            'optimization_goal' => 'required|string|in:LINK_CLICKS,LANDING_PAGE_VIEWS,REACH,IMPRESSIONS,LEAD_GENERATION,OFFSITE_CONVERSIONS,POST_ENGAGEMENT',
 
             'bid_strategy' => 'required|string|in:LOWEST_COST_WITHOUT_CAP',
 
@@ -134,9 +142,9 @@ class AdSetController extends Controller
 
             'age_max' => 'required|integer|min:18|max:65',
 
-            'geo_mode' => 'required|in:countries_only,countries_and_cities',
-
             'countries' => 'required|array|min:1',
+
+            'geo_mode' => 'required|in:countries_only,countries_and_cities',
 
             'cities_json' => 'nullable|string',
 
@@ -145,8 +153,6 @@ class AdSetController extends Controller
             'languages' => 'nullable|array',
 
             'interests' => 'nullable|array|max:5',
-
-            'interests_json' => 'nullable|string',
 
             'placement_type' => 'required|in:automatic,manual',
 
@@ -167,6 +173,12 @@ class AdSetController extends Controller
             $campaign = Campaign::with('adAccount')
                 ->findOrFail($data['campaign_id']);
 
+            TenantScope::assertCampaign($campaign);
+
+            if ($tenantPageId = TenantScope::pageId()) {
+                $data['page_id'] = $tenantPageId;
+            }
+
             if (!$campaign->meta_id) {
                 throw new Exception('Campaign not synced with Meta');
             }
@@ -183,28 +195,65 @@ class AdSetController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | OPTIMIZATION SETTINGS (local objective drives UI; Meta objective for API)
+            | OPTIMIZATION SETTINGS
             |--------------------------------------------------------------------------
             */
 
-            $localObjective = $this->meta->normalizeCampaignObjective((string) $campaign->objective);
-            $metaCampaignObjective = $localObjective;
+            $objective = strtoupper((string) $campaign->objective);
 
-            if ($campaign->meta_id) {
-                $metaCampaign = $this->meta->getCampaign($campaign->meta_id);
-                $metaCampaignObjective = $this->meta->normalizeCampaignObjective(
-                    (string) ($metaCampaign['objective'] ?? $localObjective)
-                );
-            }
+            $optimizationMap = [
 
-            if ($metaCampaignObjective === '' && $localObjective === '') {
-                throw new Exception('Campaign objective missing on Meta and locally.');
-            }
+                'TRAFFIC' => 'LINK_CLICKS',
+                'OUTCOME_TRAFFIC' => 'LINK_CLICKS',
 
-            $objectiveForGoals = $localObjective !== '' ? $localObjective : $metaCampaignObjective;
+                'LEADS' => 'LEAD_GENERATION',
+                'OUTCOME_LEADS' => 'LEAD_GENERATION',
 
-            $requestedGoal = $data['optimization_goal'] ?? null;
-            $optimizationGoal = $this->meta->resolveOptimizationGoal($objectiveForGoals, $requestedGoal);
+                'SALES' => 'OFFSITE_CONVERSIONS',
+                'OUTCOME_SALES' => 'OFFSITE_CONVERSIONS',
+
+                'AWARENESS' => 'REACH',
+                'OUTCOME_AWARENESS' => 'REACH',
+
+                'ENGAGEMENT' => 'POST_ENGAGEMENT',
+                'OUTCOME_ENGAGEMENT' => 'POST_ENGAGEMENT',
+            ];
+
+            $allowedByObjective = [
+
+                'TRAFFIC' => ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'REACH', 'IMPRESSIONS'],
+                'OUTCOME_TRAFFIC' => ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'REACH', 'IMPRESSIONS'],
+
+                'LEADS' => ['LEAD_GENERATION', 'IMPRESSIONS'],
+                'OUTCOME_LEADS' => ['LEAD_GENERATION', 'IMPRESSIONS'],
+
+                'SALES' => ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'LANDING_PAGE_VIEWS'],
+                'OUTCOME_SALES' => ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'LANDING_PAGE_VIEWS'],
+
+                'AWARENESS' => ['REACH', 'IMPRESSIONS'],
+                'OUTCOME_AWARENESS' => ['REACH', 'IMPRESSIONS'],
+
+                'ENGAGEMENT' => ['POST_ENGAGEMENT', 'IMPRESSIONS', 'REACH'],
+                'OUTCOME_ENGAGEMENT' => ['POST_ENGAGEMENT', 'IMPRESSIONS', 'REACH'],
+            ];
+
+            $defaultGoal = $optimizationMap[$objective] ?? 'LINK_CLICKS';
+
+            $allowed = $allowedByObjective[$objective] ?? [
+                'LINK_CLICKS',
+                'LANDING_PAGE_VIEWS',
+                'REACH',
+                'IMPRESSIONS',
+                'LEAD_GENERATION',
+                'OFFSITE_CONVERSIONS',
+                'POST_ENGAGEMENT',
+            ];
+
+            $requestedGoal = $data['optimization_goal'];
+
+            $optimizationGoal = in_array($requestedGoal, $allowed, true)
+                ? $requestedGoal
+                : $defaultGoal;
 
             $billingEvent = 'IMPRESSIONS';
 
@@ -215,9 +264,6 @@ class AdSetController extends Controller
             */
 
             $targeting = $this->buildAdSetTargeting($data);
-
-            $languages = array_map('intval', $data['languages'] ?? []);
-            unset($targeting['locales']);
 
             /*
             |--------------------------------------------------------------------------
@@ -237,8 +283,6 @@ class AdSetController extends Controller
 
                 'optimization_goal' => $optimizationGoal,
 
-                'campaign_objective' => $metaCampaignObjective,
-
                 'bid_strategy' => 'LOWEST_COST_WITHOUT_CAP',
 
                 'status' => 'PAUSED',
@@ -250,21 +294,34 @@ class AdSetController extends Controller
                     'page_id' => $data['page_id']
                 ],
 
-                // DO NOT JSON encode here
                 'targeting' => $targeting
             ];
 
+            $languages = array_map('intval', $data['languages'] ?? []);
+
             Log::info('META_ADSET_PAYLOAD', $payload);
 
-            $created = $this->meta->createAdSetResilient(
-                $accountId,
-                $payload,
-                $metaCampaignObjective
-            );
+            if ($optimizationGoal === 'LEAD_GENERATION') {
+                $tosStatus = $this->meta->getPageLeadgenTosStatus($data['page_id']);
 
-            $response = $created['response'];
-            $optimizationGoal = $created['optimization_goal'];
-            $targeting = $created['targeting'];
+                if (! $tosStatus['accepted']) {
+                    throw new Exception($this->meta->formatLeadgenTosError(
+                        $data['page_id'],
+                        $tosStatus['page_name'] ?? null
+                    ));
+                }
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | CREATE META ADSET
+            |--------------------------------------------------------------------------
+            */
+
+            $response = $this->meta->createAdSet(
+                $accountId,
+                $payload
+            );
 
             Log::info('META_ADSET_RESPONSE', $response);
 
@@ -274,6 +331,17 @@ class AdSetController extends Controller
                     $response['error']['message']
                         ?? 'Meta failed to create AdSet'
                 );
+            }
+
+            if (! empty($response['_meta_interest_replacements'])) {
+                $targeting = $this->meta->applyInterestReplacements(
+                    $targeting,
+                    $response['_meta_interest_replacements']
+                ) ?? $targeting;
+            }
+
+            if (! empty($response['_meta_interests_removed'])) {
+                unset($targeting['flexible_spec']);
             }
 
             /*
@@ -305,13 +373,18 @@ $adset = AdSet::create([
 
             DB::commit();
 
+            $successMessage = 'Ad Set created successfully.';
+            if (! empty($response['_meta_interest_replacements'])) {
+                $count = count($response['_meta_interest_replacements']);
+                $successMessage .= " Meta replaced {$count} deprecated interest(s) with current alternatives automatically.";
+            }
+            if (! empty($response['_meta_interests_removed'])) {
+                $successMessage .= ' Remaining interest targeting was removed because Meta rejected it for this ad set.';
+            }
+
             return redirect()
-                ->route('admin.creatives.create', [
-                    'campaign' => $campaign->id,
-                    'adset' => $adset->id,
-                    'page' => $data['page_id'],
-                ])
-                ->with('success', 'Ad set created. Continue with your creative, then your ad.');
+                ->route('admin.campaigns.index')
+                ->with('success', $successMessage);
 
         }
 
@@ -466,9 +539,7 @@ public function sync(AdSet $adset)
         $adset->update([
 
             'status' => $metaData['status'] ?? $adset->status,
-            'daily_budget' => isset($metaData['daily_budget'])
-                ? (int) $metaData['daily_budget']
-                : $adset->daily_budget,
+            'daily_budget' => $metaData['daily_budget'] ?? $adset->daily_budget
 
         ]);
 
@@ -483,9 +554,11 @@ public function sync(AdSet $adset)
 }
 public function edit(AdSet $adset)
 {
+    TenantScope::assertAdSet($adset);
+
     $adset->load('campaign');
 
-    $campaigns = Campaign::latest()->get();
+    $campaigns = TenantScope::campaigns(Campaign::query())->latest()->get();
 
     $countries = config('meta.countries', []);
     $languages = config('meta.languages', []);
@@ -498,7 +571,7 @@ public function edit(AdSet $adset)
 
     try {
 
-        $pages = $this->meta->getPages();
+        $pages = TenantScope::filterPages($this->meta->getPages());
 
     } catch (\Throwable $e) {
 
@@ -520,13 +593,8 @@ public function edit(AdSet $adset)
         ? $rawTargeting
         : json_decode($rawTargeting ?? '{}', true);
 
-    $adset->countries = array_values(array_unique(array_merge(
-        $targeting['geo_locations']['countries'] ?? [],
-        collect($targeting['geo_locations']['cities'] ?? [])
-            ->map(fn ($city) => is_array($city) ? strtoupper((string) ($city['country'] ?? '')) : '')
-            ->filter()
-            ->all()
-    )));
+    $adset->countries =
+        $targeting['geo_locations']['countries'] ?? [];
 
     $adset->cities =
         $targeting['geo_locations']['cities'] ?? [];
@@ -553,25 +621,19 @@ public function edit(AdSet $adset)
     |--------------------------------------------------------------------------
     */
 
-    $interests = [];
-    $interestOptions = [];
+  $interests = [];
 
-    if (! empty($targeting['flexible_spec'][0]['interests'])) {
-        foreach ($targeting['flexible_spec'][0]['interests'] as $interest) {
-            $id = (string) ($interest['id'] ?? '');
-            if ($id === '') {
-                continue;
-            }
+if (!empty($targeting['flexible_spec'][0]['interests'])) {
 
-            $interests[] = $id;
-            $interestOptions[] = [
-                'id' => $id,
-                'name' => (string) ($interest['name'] ?? $id),
-            ];
-        }
+    foreach ($targeting['flexible_spec'][0]['interests'] as $interest) {
+
+        $interests[] = $interest['id'];
+
     }
 
-    $adset->interests = $interests;
+}
+
+$adset->interests = $interests;
 
     /*
     |--------------------------------------------------------------------------
@@ -588,13 +650,14 @@ public function edit(AdSet $adset)
         : 'automatic';
 
 
-    return view('admin.adsets.edit', [
-        'adset' => $adset,
-        'campaigns' => $campaigns,
-        'countries' => $countries,
-        'languages' => $languages,
-        'pages' => $pages,
-        'interestOptions' => $interestOptions,
+    return view('admin.adsets.edit',[
+
+        'adset'=>$adset,
+        'campaigns'=>$campaigns,
+        'countries'=>$countries,
+        'languages'=>$languages,
+        'pages'=>$pages
+
     ]);
 }
 public function update(Request $request, AdSet $adset)
@@ -612,14 +675,15 @@ public function update(Request $request, AdSet $adset)
         'age_min' => 'required|integer|min:18|max:65',
         'age_max' => 'required|integer|min:18|max:65',
 
+        'countries' => 'required|array|min:1',
+
         'geo_mode' => 'required|in:countries_only,countries_and_cities',
 
-        'countries' => 'required|array|min:1',
         'cities_json' => 'nullable|string',
+
         'genders' => 'nullable|array',
         'languages' => 'nullable|array',
         'interests' => 'nullable|array|max:5',
-        'interests_json' => 'nullable|string',
 
         'placement_type' => 'required|in:automatic,manual',
         'publisher_platforms' => 'nullable|array'
@@ -636,19 +700,17 @@ public function update(Request $request, AdSet $adset)
 
         /*
         |--------------------------------------------------------------------------
-        | Rebuild Targeting
+        | Rebuild Targeting (LOCAL STORAGE ONLY)
         |--------------------------------------------------------------------------
         */
 
         $targeting = $this->buildAdSetTargeting($data);
-        $languages = array_map('intval', $data['languages'] ?? []);
 
-        $metaTargeting = $targeting;
-        unset($metaTargeting['locales']);
+        $languages = array_map('intval', $data['languages'] ?? []);
 
         /*
         |--------------------------------------------------------------------------
-        | UPDATE META (including targeting so delivery matches local settings)
+        | UPDATE META (SAFE FIELDS ONLY)
         |--------------------------------------------------------------------------
         */
 
@@ -660,9 +722,7 @@ public function update(Request $request, AdSet $adset)
 
                 'daily_budget' => (int)$data['daily_budget'] * 100,
 
-                'status' => $data['status'],
-
-                'targeting' => $metaTargeting,
+                'status' => $data['status']
             ];
 
             Log::info('META_ADSET_UPDATE_PAYLOAD', [
@@ -692,7 +752,7 @@ public function update(Request $request, AdSet $adset)
 
             'targeting' => array_merge($targeting, [
                 'locales' => $languages,
-            ]),
+            ])
         ]);
 
         return redirect()
@@ -754,33 +814,11 @@ public function update(Request $request, AdSet $adset)
 
         if (! empty($data['interests'])) {
             $interestList = [];
-            $interestNames = [];
-
-            if (! empty($data['interests_json'])) {
-                $decodedInterests = json_decode($data['interests_json'], true);
-                if (is_array($decodedInterests)) {
-                    foreach ($decodedInterests as $interest) {
-                        if (! is_array($interest)) {
-                            continue;
-                        }
-
-                        $id = (string) ($interest['id'] ?? '');
-                        if ($id !== '') {
-                            $interestNames[$id] = (string) ($interest['name'] ?? $id);
-                        }
-                    }
-                }
-            }
 
             foreach ($data['interests'] as $interestId) {
-                $id = (string) $interestId;
-                $entry = ['id' => $id];
-
-                if (! empty($interestNames[$id])) {
-                    $entry['name'] = $interestNames[$id];
-                }
-
-                $interestList[] = $entry;
+                $interestList[] = [
+                    'id' => (string) $interestId,
+                ];
             }
 
             $targeting['flexible_spec'] = [[
@@ -793,10 +831,7 @@ public function update(Request $request, AdSet $adset)
                 throw new Exception('Select at least one placement');
             }
 
-            $targeting['publisher_platforms'] = array_values(array_diff(
-                $data['publisher_platforms'],
-                ['audience_network', 'messenger']
-            ));
+            $targeting['publisher_platforms'] = $data['publisher_platforms'];
 
             if (! empty($targeting['publisher_platforms'])) {
                 $targeting = $this->meta->enrichPlacementsForTargeting($targeting);

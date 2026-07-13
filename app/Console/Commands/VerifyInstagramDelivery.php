@@ -16,15 +16,15 @@ class VerifyInstagramDelivery extends Command
     {
         $report = $instagram->verify();
 
-        $this->info('Instagram delivery check');
+        $this->info('WABA Instagram delivery check (separate Meta account from xanderbot)');
         $this->table(
             ['Setting', 'Value'],
             [
+                ['App', (string) ($report['app'] ?? 'WABA')],
                 ['META_PAGE_ID', (string) ($report['page_id'] ?: '—')],
                 ['META_AD_ACCOUNT_ID', (string) ($report['ad_account_id'] ?: '—')],
                 ['Page shows connected IG', $report['page_connected'] ? 'Yes' : 'No'],
-                ['Page-linked Instagram ID', (string) ($report['page_linked_instagram_id'] ?? '—')],
-                ['Instagram user ID (used for ads)', (string) ($report['instagram_user_id'] ?: '—')],
+                ['Instagram user ID', (string) ($report['instagram_user_id'] ?: '—')],
                 ['Resolved via', (string) ($report['source'] ?: '—')],
                 ['.env META_INSTAGRAM_USER_ID', $report['env_fallback'] ? 'Set' : 'Not set'],
                 ['Ready for ads', $report['ready'] ? 'YES' : 'NO'],

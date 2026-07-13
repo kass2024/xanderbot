@@ -98,7 +98,7 @@
                     <dd class="text-xl font-semibold">{{ $stats['messages_today'] ?? 0 }}</dd>
                 </div>
             </dl>
-            <a href="{{ route('admin.inbox.index') }}" class="mt-6 inline-flex w-full justify-center rounded-lg bg-xander-gold px-4 py-2.5 text-sm font-bold text-xander-accent transition hover:brightness-110">
+            <a href="{{ route('admin.inbox.index') }}" class="mt-6 inline-flex w-full justify-center rounded-lg bg-xander-gold px-4 py-2.5 text-sm font-bold text-white transition hover:brightness-110">
                 Open inbox
             </a>
         </div>

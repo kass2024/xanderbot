@@ -3,7 +3,6 @@
 namespace App\Services\Chatbot;
 
 use App\Models\PlatformMetaConnection;
-use App\Support\WhatsAppTracker;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
@@ -18,11 +17,9 @@ class MessageDispatcher
         array $payload
     ): array {
 
-        WhatsAppTracker::whatsapp('outbound_dispatch_start', [
+        Log::info('WhatsApp Dispatcher started', [
             'to' => $to,
             'platform_id' => $platform->id,
-            'has_text' => ! empty($payload['text']),
-            'attachments' => count($payload['attachments'] ?? []),
         ]);
 
         if (empty($platform->whatsapp_phone_number_id)) {
@@ -190,10 +187,10 @@ class MessageDispatcher
                 return $last;
             }
 
-            WhatsAppTracker::whatsapp('graph_token_rejected', [
-                'token_source' => $candidate['source'],
+            Log::warning('WhatsApp token rejected, trying next source', [
+                'source' => $candidate['source'],
                 'status' => $last['status'] ?? null,
-            ], 'warning');
+            ]);
         }
 
         return $last;
@@ -207,17 +204,12 @@ class MessageDispatcher
                 ->retry(2, 500, throw: false)
                 ->post($endpoint, $body);
 
-            $msgType = (string) ($body['type'] ?? 'unknown');
-            $to = (string) ($body['to'] ?? '');
-
             if ($response->failed()) {
-                WhatsAppTracker::whatsapp('graph_send_failed', [
-                    'to' => $to,
-                    'type' => $msgType,
+                Log::error('WhatsApp API request failed', [
                     'token_source' => $source,
-                    'http_status' => $response->status(),
-                    'response' => substr((string) $response->body(), 0, 1500),
-                ], 'error');
+                    'status'       => $response->status(),
+                    'response'     => $response->body(),
+                ]);
 
                 return [
                     'success' => false,
@@ -227,30 +219,23 @@ class MessageDispatcher
             }
 
             $data = $response->json();
-            $messageId = $data['messages'][0]['id'] ?? null;
-            $messageStatus = $data['messages'][0]['message_status'] ?? null;
 
-            WhatsAppTracker::whatsapp('graph_send_ok', [
-                'to' => $to,
-                'type' => $msgType,
+            Log::info('WhatsApp message sent', [
                 'token_source' => $source,
-                'wamid' => $messageId,
-                'message_status' => $messageStatus,
+                'response'     => $data,
             ]);
 
             return [
                 'success' => true,
-                'external_message_id' => $messageId,
+                'external_message_id' => $data['messages'][0]['id'] ?? null,
                 'response' => $data,
             ];
 
         } catch (\Throwable $e) {
-            WhatsAppTracker::whatsapp('graph_send_exception', [
-                'to' => (string) ($body['to'] ?? ''),
-                'type' => (string) ($body['type'] ?? ''),
+            Log::critical('WhatsApp API exception', [
                 'token_source' => $source,
-                'error' => $e->getMessage(),
-            ], 'critical');
+                'error'        => $e->getMessage(),
+            ]);
 
             return [
                 'success' => false,
@@ -260,6 +245,8 @@ class MessageDispatcher
     }
 
     /**
+     * Prefer .env token (fresh) then DB. Env is tried first when phone_number_id matches.
+     *
      * @return array<int, array{source: string, token: string}>
      */
     protected function accessTokenCandidates(PlatformMetaConnection $platform): array

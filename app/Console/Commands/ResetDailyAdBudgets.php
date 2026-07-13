@@ -2,7 +2,8 @@
 
 namespace App\Console\Commands;
 
-use App\Services\AdBudgetEnforcementService;
+use App\Models\Ad;
+use App\Services\MetaAdsService;
 use App\Support\AdBudgetGuard;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
@@ -12,49 +13,58 @@ class ResetDailyAdBudgets extends Command
 {
     protected $signature = 'ads:reset-daily-budget';
 
-    protected $description = 'Reset daily spend counters and enforce per-ad budget pauses (no auto-resume)';
+    protected $description = 'Reset daily spend counters and auto-pause ads that reached their daily budget';
 
-    public function __construct(
-        protected AdBudgetEnforcementService $enforcer,
-    ) {
+    public function __construct(protected MetaAdsService $meta)
+    {
         parent::__construct();
     }
 
     public function handle(): int
     {
         $today = Carbon::today()->toDateString();
-        $reset = 0;
 
-        foreach (\App\Models\Ad::whereNotNull('meta_ad_id')->cursor() as $ad) {
+        $reset = 0;
+        $paused = 0;
+
+        foreach (Ad::whereNotNull('meta_ad_id')->get() as $ad) {
             try {
-                if (! $ad->spend_date || $ad->spend_date->toDateString() !== $today) {
+                if (! $ad->spend_date || $ad->spend_date < $today) {
                     $payload = AdBudgetGuard::filterPersistablePayload([
                         'daily_spend' => 0,
-                        'spend_date' => $today,
                         'daily_spend_anchor' => 0,
+                        'spend_date' => $today,
                     ]);
+
                     $ad->update($payload);
+
+                    $ad->daily_spend = 0;
+                    $ad->spend_date = $today;
+
+                    if (AdBudgetGuard::hasAnchorColumn()) {
+                        $ad->daily_spend_anchor = 0;
+                    }
+
                     $reset++;
                 }
+
+                $wasActive = $ad->status === Ad::STATUS_ACTIVE;
+
+                AdBudgetGuard::enforce($ad, $this->meta);
+
+                if ($wasActive && $ad->status === Ad::STATUS_PAUSED && $ad->pause_reason === 'budget_limit') {
+                    $paused++;
+                }
             } catch (\Throwable $e) {
-                Log::error('BUDGET_RESET_AD_FAILED', [
+                Log::error('ADS_RESET_DAILY_BUDGET_FAILED', [
                     'ad_id' => $ad->id,
                     'error' => $e->getMessage(),
                 ]);
             }
         }
 
-        $stats = $this->enforcer->enforceAll();
+        $this->info("Reset: {$reset} | Auto-paused for budget: {$paused}");
 
-        $this->info(sprintf(
-            'Reset: %d | Checked: %d | Paused: %d | Re-paused: %d | Errors: %d',
-            $reset,
-            $stats['checked'],
-            $stats['paused'],
-            $stats['re_paused'],
-            $stats['errors'],
-        ));
-
-        return Command::SUCCESS;
+        return self::SUCCESS;
     }
 }

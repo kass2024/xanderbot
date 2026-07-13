@@ -42,6 +42,10 @@ fi
 echo "==> Clearing caches"
 "$PHP_BIN" artisan optimize:clear || true
 
+# 4b) Pending migrations (idempotent ALTER migrations)
+echo "==> Auto migrations"
+"$PHP_BIN" artisan migrate:auto --force || true
+
 # 5) Rebuild caches as web user if possible
 echo "==> Rebuilding config & routes"
 if id "$WEB_USER" &>/dev/null; then

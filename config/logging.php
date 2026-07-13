@@ -79,18 +79,13 @@ return [
             'replace_placeholders' => true,
         ],
 
+        /*
+        | Meta / WhatsApp webhook trace (tail: storage/logs/webhook.log)
+        */
         'webhook' => [
             'driver' => 'single',
             'path' => storage_path('logs/webhook.log'),
             'level' => env('LOG_WEBHOOK_LEVEL', env('LOG_LEVEL', 'debug')),
-            'replace_placeholders' => true,
-        ],
-
-        'whatsapp' => [
-            'driver' => 'daily',
-            'path' => storage_path('logs/whatsapp.log'),
-            'level' => env('LOG_LEVEL', 'debug'),
-            'days' => 30,
             'replace_placeholders' => true,
         ],
 

@@ -12,9 +12,9 @@ class AIEngine
 {
     protected string $model;
 
-    // Tunable thresholds - Lowered to use AI more readily
-    protected float $faqThreshold = 0.75;
-    protected float $groundThreshold = 0.50;
+    // Tunable thresholds
+    protected float $faqThreshold = 0.60;
+    protected float $groundThreshold = 0.40;
     protected int $candidateLimit = 5;
     protected int $timeout = 30;
 
@@ -597,25 +597,7 @@ class AIEngine
 
     protected function handlePureAI(int $clientId, string $hash, string $message, string $requestId): array
     {
-        $prompt = "You are a professional visa and education consultant working for Xander Global Scholars, a reputable education consultancy.
-
-Your role is to provide accurate, helpful information about:
-- Student visa applications and requirements for various countries
-- Study abroad programs and university applications
-- Scholarship opportunities and financial aid
-- Education consultancy services
-- Application processes and document requirements
-- Country-specific immigration information
-
-Guidelines:
-1. Be professional, friendly, and helpful
-2. Provide accurate and up-to-date information
-3. If you're not certain about specific requirements, recommend checking official sources
-4. Suggest consulting with our expert consultants for complex cases
-5. Keep responses comprehensive but easy to understand
-6. Mention our services when relevant
-
-User question: $message";
+        $prompt = "You are a professional visa assistant.\n\nUser: $message";
 
         $answer = $this->callOpenAI($prompt, $requestId);
 
@@ -623,16 +605,7 @@ User question: $message";
             $clientId,
             $hash,
             $this->formatResponse(
-                $answer ?? "I'm here to help with your visa and study abroad questions! Xander Global Scholars provides comprehensive consultancy services for international education.
-
-I can assist with information about:
-• Student visa requirements and applications
-• Study abroad programs and universities
-• Scholarship opportunities
-• Application processes and required documents
-• Country-specific guidance
-
-For personalized assistance with your specific situation, I recommend consulting with our expert education consultants who can provide tailored guidance for your goals.",
+                $answer ?? 'Please contact support.',
                 [],
                 0.50,
                 'pure_ai'
@@ -683,7 +656,7 @@ Provide the best possible helpful answer using the information above.
         $answer = $this->callOpenAI($prompt, $requestId);
 
         $response = $this->formatResponse(
-            $answer ?? "Based on available information, I can help with visa and study abroad services. For detailed guidance, please contact our expert consultants.",
+            $answer ?? 'Please contact support.',
             $candidates[0]['knowledge']->attachments ?? [],
             0.65,
             'grounded_ai'
@@ -695,29 +668,17 @@ Provide the best possible helpful answer using the information above.
     protected function callOpenAI(string $prompt, string $requestId): ?string
     {
         try {
-            $apiKey = config('services.openai.key');
-            
-            if (!$apiKey) {
-                Log::error('OPENAI_KEY_MISSING', [
-                    'request_id' => $requestId
-                ]);
-                return null;
-            }
-
-            $response = Http::withToken($apiKey)
+            $response = Http::withToken(config('services.openai.key'))
                 ->timeout($this->timeout)
                 ->retry(2, 500)
                 ->post('https://api.openai.com/v1/chat/completions', [
                     'model' => $this->model,
                     'messages' => [
-                        [
-                            'role' => 'system', 
-                            'content' => 'You are a professional visa and education consultant for Xander Global Scholars. Provide accurate, helpful, and detailed responses about visa services, study abroad programs, and educational opportunities. Always be professional and friendly. If you are not certain about specific visa requirements, advise users to consult with official sources or our expert consultants.'
-                        ],
+                        ['role' => 'system', 'content' => 'You are a helpful visa consultant.'],
                         ['role' => 'user', 'content' => $prompt]
                     ],
                     'temperature' => 0.3,
-                    'max_tokens' => 800
+                    'max_tokens' => 500
                 ]);
 
             if ($response->failed()) {
@@ -730,16 +691,7 @@ Provide the best possible helpful answer using the information above.
             }
 
             $json = $response->json();
-            $content = $json['choices'][0]['message']['content'] ?? null;
-            
-            if ($content) {
-                Log::info('OPENAI_SUCCESS', [
-                    'response_preview' => substr($content, 0, 100),
-                    'request_id' => $requestId
-                ]);
-            }
-
-            return $content;
+            return $json['choices'][0]['message']['content'] ?? null;
 
         } catch (\Throwable $e) {
             Log::error('OpenAI ERROR', [
@@ -898,7 +850,7 @@ Provide the best possible helpful answer using the information above.
     protected function greetingResponse(): array
     {
         return [
-            'text' => "Hello! 👋 Welcome to Xander Global Scholars!\n\nI'm your virtual assistant for visa and education services. I can help you with:\n\n📋 **Student Visa Requirements**\n🎓 **Study Abroad Programs**\n🏛️ **University Applications**\n💰 **Scholarship Opportunities**\n📝 **Application Processes**\n🌍 **Country-specific Guidance**\n\nJust ask me anything about studying abroad or visa services!\n\nNeed to speak to a human? Type 'talk to human' anytime.",
+            'text' => "Hello! 👋 I'm your virtual assistant from xanderglobalscholars.\n\nHow can I help you today? You can ask me about:\n• Visa requirements\n• Study abroad programs\n• Our services\n• Application process\n• Scholarships\n\nOr type 'talk to human' to speak with a real agent.",
             'attachments' => [],
             'confidence' => 1.0,
             'source' => 'greeting'

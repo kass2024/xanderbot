@@ -36,7 +36,7 @@ class SyncWhatsAppTokenFromEnv extends Command
         $connections = $query->get();
 
         if ($connections->isEmpty()) {
-            $this->error('No platform_meta_connections row found. Pass --platform=ID or set WHATSAPP_PHONE_NUMBER_ID.');
+            $this->error('No platform_meta_connections row found. Pass --platform=8 or set WHATSAPP_PHONE_NUMBER_ID.');
 
             return self::FAILURE;
         }

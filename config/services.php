@@ -22,7 +22,7 @@ return [
         'client_secret' => env('FB_APP_SECRET'),
         'redirect'      => env('FB_REDIRECT_URI'),
 
-        'graph_version' => env('FB_GRAPH_VERSION', 'v22.0'),
+        'graph_version' => env('FB_GRAPH_VERSION', 'v19.0'),
         'graph_url'     => env('FB_GRAPH_URL', 'https://graph.facebook.com'),
         'oauth_url'     => env('FB_OAUTH_URL', 'https://www.facebook.com'),
     ],
@@ -38,16 +38,34 @@ return [
         'app_secret'   => env('META_APP_SECRET'),
         'redirect_uri' => env('META_REDIRECT_URI'),
 
-        'graph_version' => env('META_GRAPH_VERSION', 'v22.0'),
+        'graph_version' => env('META_GRAPH_VERSION', 'v19.0'),
         'graph_url'     => env('META_GRAPH_URL', 'https://graph.facebook.com'),
         'oauth_url'     => env('META_OAUTH_URL', 'https://www.facebook.com'),
 
-    'token' => env('META_SYSTEM_USER_TOKEN'),
-    'ad_account_id' => env('META_AD_ACCOUNT_ID'),
-     'page_id' => env('META_PAGE_ID'),
-    /** Fallback when Page → IG lookup fails; find in Meta Business Suite → Instagram account ID */
-    'instagram_user_id' => env('META_INSTAGRAM_USER_ID'),
-    'refresh_before_days' => env('META_TOKEN_REFRESH_BEFORE_DAYS', 5),
+        'token' => env('META_SYSTEM_USER_TOKEN'),
+        /** Xander bot platform ad account (from META_AD_ACCOUNT_ID). */
+        'ad_account_id' => env('META_AD_ACCOUNT_ID'),
+        /** Default Page for this deployment (each client may have its own meta_page_id). */
+        'page_id' => env('META_PAGE_ID'),
+        /** Label for the page when using META_PAGE_ID fallback (create creative form). */
+        'page_name' => env('META_PAGE_NAME', 'Xander Global Scholars'),
+        /** Instagram business account ID if Page lookup fails. */
+        'instagram_user_id' => env('META_INSTAGRAM_USER_ID'),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Graph API HTTP client (avoid cURL "Resolving timed out after 10000 ms")
+        |--------------------------------------------------------------------------
+        */
+        'http_timeout' => (int) env('META_HTTP_TIMEOUT', 90),
+        'http_connect_timeout' => (int) env('META_HTTP_CONNECT_TIMEOUT', 45),
+        'mutation_timeout' => (int) env('META_MUTATION_TIMEOUT', 25),
+        'search_timeout' => (int) env('META_SEARCH_TIMEOUT', 15),
+
+        /** null = auto (0 when interests/placements set, else 1). Set 0 or 1 to force. */
+        'advantage_audience' => env('META_ADVANTAGE_AUDIENCE'),
+
+        'refresh_before_days' => env('META_TOKEN_REFRESH_BEFORE_DAYS', 5),
 
         /*
         |--------------------------------------------------------------------------
@@ -86,7 +104,7 @@ return [
     */
     'whatsapp' => [
 
-       'graph_version' => env('META_GRAPH_VERSION', 'v22.0'),
+       'graph_version' => env('META_GRAPH_VERSION', 'v19.0'),
     'graph_url'     => env('META_GRAPH_URL', 'https://graph.facebook.com'),
     'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
     'access_token'    => env('WHATSAPP_ACCESS_TOKEN'),
@@ -115,8 +133,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Optional webhook forward (second Laravel app, same Meta app ID)
+    |--------------------------------------------------------------------------
+    | Meta sends webhooks only to one URL (this app: /api/webhook/meta).
+    | Comma-separated phone_number_id values can be forwarded in-process.
+    */
+    'parrot_support' => [
+        'forward_url' => env('PARROT_WEBHOOK_FORWARD_URL'),
+        'phone_number_ids' => array_values(array_filter(array_map(
+            static fn (string $id) => trim($id),
+            explode(',', (string) env('PARROT_SUPPORT_PHONE_NUMBER_IDS', ''))
+        ), static fn (string $id) => $id !== '')),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Pre-screening on cPanel (xanderglobalscholars.com)
-    | Meta webhook stays here; messages + delivery statuses forward to cPanel.
+    | Meta webhook stays here; messages + delivery statuses can forward to cPanel.
     |--------------------------------------------------------------------------
     */
     'prescreening' => [
@@ -126,18 +159,35 @@ return [
         ),
         'forward_secret' => env('PRESCREENING_FORWARD_SECRET'),
     ],
-    
+
 'openai' => [
     'key'   => env('OPENAI_API_KEY'),
     'model' => env('OPENAI_MODEL', 'gpt-4.1-mini'),
     'embedding_model' => env('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small'),
+    'image_model' => env('OPENAI_IMAGE_MODEL', 'dall-e-3'),
 ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Google Gemini (Ad Studio + optional chatbot)
+    |--------------------------------------------------------------------------
+    | Primary key: GOOGLE_AI_API_KEY (AIzaSy… from https://aistudio.google.com/apikey)
+    | Do NOT use GEMINI_API_KEY unless it is also an AIzaSy key.
+    */
+    'gemini' => [
+        'api_key' => env('GOOGLE_AI_API_KEY', env('GEMINI_API_KEY')),
+        'model' => env('GOOGLE_AI_MODEL', env('GEMINI_MODEL', 'gemini-2.5-flash')),
+        'image_model' => env('GEMINI_IMAGE_MODEL', 'gemini-2.0-flash-preview-image-generation'),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Ads Defaults
     |--------------------------------------------------------------------------
     */
     'ads' => [
+
+        'ai_provider' => env('AD_AI_PROVIDER', 'gemini'),
 
         'default_currency' => env('ADS_DEFAULT_CURRENCY', 'USD'),
         'default_timezone' => env('ADS_DEFAULT_TIMEZONE', 'UTC'),

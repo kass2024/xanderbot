@@ -18,11 +18,24 @@ $r = $routeName ?: Route::currentRouteName();
             || str_contains($r, 'admin.campaigns')
             || str_contains($r, 'admin.adsets')
             || str_contains($r, 'admin.ads')
-            || str_contains($r, 'admin.creatives') ? 'true' : 'false' }},
+            || str_contains($r, 'admin.creatives')
+            || str_contains($r, 'admin.marketing') ? 'true' : 'false' }},
+        openBm: {{ str_contains($r, 'admin.meta') ? 'true' : 'false' }},
         openAutomation: {{ str_contains($r, 'admin.inbox')
             || str_contains($r, 'admin.faq')
             || str_contains($r, 'admin.bulk') ? 'true' : 'false' }},
-        openSettings: {{ str_contains($r, 'admin.settings') || str_contains($r, 'admin.users') ? 'true' : 'false' }}
+        openSettings: {{ str_contains($r, 'admin.settings') || str_contains($r, 'admin.users') ? 'true' : 'false' }},
+        prefetch(url) {
+            if (!url || url === '#' || url.startsWith('javascript:')) return;
+            this._prefetched = this._prefetched || new Set();
+            if (this._prefetched.has(url)) return;
+            this._prefetched.add(url);
+            const link = document.createElement('link');
+            link.rel = 'prefetch';
+            link.href = url;
+            link.as = 'document';
+            document.head.appendChild(link);
+        }
     }"
     class="flex h-full w-full min-h-0 flex-col border-r border-white/10 bg-gradient-to-b from-xander-navy via-xander-navy to-xander-accent text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]"
 >
@@ -72,6 +85,8 @@ $r = $routeName ?: Route::currentRouteName();
     <nav
         class="flex-1 space-y-0.5 overflow-y-auto overflow-x-hidden px-2.5 py-3 text-sm [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.2)_transparent]"
         @click.capture="if ($event.target.closest('a[href]')) { $dispatch('close-mobile-nav') }"
+        @mouseover="const a = $event.target.closest('a[href]'); if (a) prefetch(a.href)"
+        @focusin="const a = $event.target.closest('a[href]'); if (a) prefetch(a.href)"
     >
 
         @if($isSuperAdmin)
@@ -83,6 +98,13 @@ $r = $routeName ?: Route::currentRouteName();
                 Overview
             </a>
 
+            <a href="{{ route('admin.tenants.index') }}"
+               class="flex items-center gap-3 rounded-xl px-3 py-2.5 font-medium transition
+               {{ str_contains($r, 'admin.tenants') ? 'bg-white/15 text-white shadow-inner ring-1 ring-xander-gold/35' : 'text-white/88 hover:bg-white/10' }}">
+                <span class="text-lg opacity-90" aria-hidden="true">🛰️</span>
+                Tenant monitor
+            </a>
+
             <a href="{{ route('admin.clients.index') }}"
                class="flex items-center gap-3 rounded-xl px-3 py-2.5 font-medium transition
                {{ str_contains($r, 'admin.clients') ? 'bg-white/15 text-white shadow-inner ring-1 ring-xander-gold/35' : 'text-white/88 hover:bg-white/10' }}">
@@ -90,12 +112,29 @@ $r = $routeName ?: Route::currentRouteName();
                 Businesses
             </a>
 
-            <a href="{{ route('admin.meta.index') }}"
-               class="flex items-center gap-3 rounded-xl px-3 py-2.5 font-medium transition
-               {{ str_contains($r, 'admin.meta') ? 'bg-white/15 text-white shadow-inner ring-1 ring-xander-gold/35' : 'text-white/88 hover:bg-white/10' }}">
-                <span class="text-lg opacity-90" aria-hidden="true">🏢</span>
-                Business Manager
-            </a>
+            <div class="pt-1.5">
+                <button type="button" @click="openBm = !openBm"
+                    class="flex w-full items-center justify-between rounded-xl px-3 py-2.5 font-semibold text-white/90 transition hover:bg-white/10">
+                    <span class="flex items-center gap-3">
+                        <span class="text-lg opacity-90" aria-hidden="true">🏢</span>
+                        Business Manager
+                    </span>
+                    <svg class="h-4 w-4 transition" :class="openBm ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                    </svg>
+                </button>
+                <div x-show="openBm" x-transition class="mt-1 space-y-0.5 border-l border-white/20 pl-3 ml-3">
+                    <a href="{{ route('admin.meta.index') }}"
+                       @mouseenter="prefetch(@js(route('admin.meta.index')))"
+                       class="block rounded-lg py-2 pl-2 pr-2 text-sm text-white/78 transition hover:bg-white/8 hover:text-white {{ $r === 'admin.meta.index' ? 'bg-white/10 text-xander-gold' : '' }}">Connection</a>
+                    <a href="{{ route('admin.meta.whatsapp.index') }}"
+                       @mouseenter="prefetch(@js(route('admin.meta.whatsapp.index')))"
+                       class="block rounded-lg py-2 pl-2 pr-2 text-sm text-white/78 transition hover:bg-white/8 hover:text-white {{ str_contains($r, 'admin.meta.whatsapp') ? 'bg-white/10 text-xander-gold' : '' }}">WhatsApp accounts</a>
+                    <a href="{{ route('admin.meta.instagram.index') }}"
+                       @mouseenter="prefetch(@js(route('admin.meta.instagram.index')))"
+                       class="block rounded-lg py-2 pl-2 pr-2 text-sm text-white/78 transition hover:bg-white/8 hover:text-white {{ str_contains($r, 'admin.meta.instagram') ? 'bg-white/10 text-xander-gold' : '' }}">Instagram accounts</a>
+                </div>
+            </div>
 
         @endif
 
@@ -115,11 +154,7 @@ $r = $routeName ?: Route::currentRouteName();
                     @if($isSuperAdmin)
                         <a href="{{ route('admin.accounts.index') }}" class="block rounded-lg py-2 pl-2 pr-2 text-sm text-white/78 transition hover:bg-white/8 hover:text-white {{ str_contains($r, 'admin.accounts') ? 'bg-white/10 text-xander-gold' : '' }}">Ad accounts</a>
                     @endif
-                    <a href="{{ route('admin.marketing.wizard') }}" class="block rounded-lg py-2 pl-2 pr-2 text-sm text-white/78 transition hover:bg-white/8 hover:text-white {{ str_contains($r, 'admin.marketing.wizard') ? 'bg-white/10 text-xander-gold' : '' }}">WhatsApp campaign wizard</a>
-                    <a href="{{ route('admin.campaigns.index') }}" class="block rounded-lg py-2 pl-2 pr-2 text-sm text-white/78 transition hover:bg-white/8 hover:text-white {{ str_contains($r, 'admin.campaigns') ? 'bg-white/10 text-xander-gold' : '' }}">Campaigns</a>
-                    <a href="{{ route('admin.adsets.index') }}" class="block rounded-lg py-2 pl-2 pr-2 text-sm text-white/78 transition hover:bg-white/8 hover:text-white {{ str_contains($r, 'admin.adsets') ? 'bg-white/10 text-xander-gold' : '' }}">Ad sets</a>
-                    <a href="{{ route('admin.creatives.index') }}" class="block rounded-lg py-2 pl-2 pr-2 text-sm text-white/78 transition hover:bg-white/8 hover:text-white {{ str_contains($r, 'admin.creatives') ? 'bg-white/10 text-xander-gold' : '' }}">Creatives</a>
-                    <a href="{{ route('admin.ads.index') }}" class="block rounded-lg py-2 pl-2 pr-2 text-sm text-white/78 transition hover:bg-white/8 hover:text-white {{ str_contains($r, 'admin.ads') && !str_contains($r, 'admin.ads-manager') ? 'bg-white/10 text-xander-gold' : '' }}">Ads</a>
+                    <a href="{{ route('admin.marketing.create') }}" class="block rounded-lg py-2 pl-2 pr-2 text-sm font-semibold text-white/90 transition hover:bg-white/8 hover:text-white {{ str_contains($r, 'admin.marketing.create') || str_contains($r, 'admin.campaigns') || str_contains($r, 'admin.adsets') || str_contains($r, 'admin.creatives') || (str_contains($r, 'admin.ads') && !str_contains($r, 'admin.ads-manager')) ? 'bg-white/10 text-xander-gold' : '' }}">Ad Studio</a>
                 </div>
             </div>
         @endif

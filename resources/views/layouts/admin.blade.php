@@ -26,7 +26,13 @@
 @php
     $user = auth()->user();
     $isSuperAdmin = $user && $user->isSuperAdmin();
+    $isClient = $user && $user->isClient();
+    $canManageAds = $user && ($user->isSuperAdmin() || $user->isAgent() || $user->isClient());
     $unreadCount = \App\Models\Message::where('direction', 'incoming')->where('is_read', 0)->count();
+    $sidebarBrandName = $isSuperAdmin
+        ? config('app.name')
+        : ($user->client?->company_name ?: $user?->name ?: 'Dashboard');
+    $sidebarBrandSubtitle = $isSuperAdmin ? 'Ads & chatbot' : 'Ads workspace';
 @endphp
 
 <div
@@ -55,7 +61,11 @@
         <x-admin.sidebar
             :route-name="Route::currentRouteName()"
             :is-super-admin="$isSuperAdmin"
+            :is-client="$isClient"
+            :can-manage-ads="$canManageAds"
             :unread-count="$unreadCount"
+            :brand-name="$sidebarBrandName"
+            :brand-subtitle="$sidebarBrandSubtitle"
         />
     </aside>
 
@@ -77,6 +87,16 @@
                 </p>
             </div>
             <div class="flex shrink-0 items-center gap-3 sm:gap-6">
+                @if($isClient && $user->client?->meta_page_name)
+                    <span class="hidden max-w-[280px] truncate rounded-lg bg-xander-navy/5 px-3 py-1.5 text-xs font-medium text-xander-navy lg:inline">
+                        Page: {{ $user->client->meta_page_name }}
+                        @if($user->client->whatsapp_phone_number)
+                            · WA +{{ $user->client->whatsapp_phone_number }}
+                        @endif
+                    </span>
+                @elseif($isClient && ! $user->client?->hasPublishingProfile())
+                    <a href="{{ route('client.profile.edit') }}" class="hidden text-xs font-semibold text-amber-700 hover:underline lg:inline">Set Page &amp; WhatsApp →</a>
+                @endif
                 <span class="hidden max-w-[160px] truncate text-sm font-semibold text-xander-navy sm:inline">{{ $user->name }}</span>
                 <form method="POST" action="{{ route('logout') }}" class="m-0">
                     @csrf
