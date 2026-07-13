@@ -43,15 +43,15 @@ return [
         'oauth_url'     => env('META_OAUTH_URL', 'https://www.facebook.com'),
 
         'token' => env('META_SYSTEM_USER_TOKEN'),
-        /** Xander bot platform ad account (from META_AD_ACCOUNT_ID). */
+        /** WABA platform ad account only — not shared with xanderbot or other apps. */
         'ad_account_id' => env('META_AD_ACCOUNT_ID'),
-        /** Default Page for this deployment (each client may have its own meta_page_id). */
+        /** Default Page for this WABA deployment (each client may have its own meta_page_id). */
         'page_id' => env('META_PAGE_ID'),
         /** Label for the page when using META_PAGE_ID fallback (create creative form). */
-        'page_name' => env('META_PAGE_NAME', 'Xander Global Scholars'),
-        /** Instagram business account ID if Page lookup fails. */
+        'page_name' => env('META_PAGE_NAME', 'Facebook Page'),
+        /** WABA-only Instagram business account ID if Page lookup fails (do not copy from xanderbot). */
         'instagram_user_id' => env('META_INSTAGRAM_USER_ID'),
-        /** Instagram username/handle when Graph omits it (system-user tokens often do). */
+        /** Optional @username fallback when Graph does not return username for system-user tokens. */
         'instagram_username' => env('META_INSTAGRAM_USERNAME'),
 
         /*
@@ -80,6 +80,10 @@ return [
     'pages_show_list',
     'pages_read_engagement',
     'pages_manage_ads',
+    'pages_read_user_content',
+    'instagram_basic',
+    'instagram_manage_insights',
+    'instagram_content_publish',
     'whatsapp_business_management',
     'whatsapp_business_messaging',
 ],
@@ -123,7 +127,7 @@ return [
     'whatsapp_webhook' => [
 
         'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
-        'app_secret'   => env('WHATSAPP_APP_SECRET') ?: env('META_APP_SECRET'),
+        'app_secret'   => env('WHATSAPP_APP_SECRET'),
 
         'signature_header' => env(
             'META_SIGNATURE_HEADER',
@@ -135,10 +139,11 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Optional webhook forward (second Laravel app, same Meta app ID)
+    | Parrot WA Support (second Laravel app, same Meta app ID)
     |--------------------------------------------------------------------------
-    | Meta sends webhooks only to one URL (this app: /api/webhook/meta).
-    | Comma-separated phone_number_id values can be forwarded in-process.
+    | Meta sends webhooks only to one URL (this app: /api/webhook/meta). Events
+    | for these WhatsApp phone_number_id values are forwarded in-process to
+    | Parrot so signature validation still passes. Comma-separated IDs.
     */
     'parrot_support' => [
         'forward_url' => env('PARROT_WEBHOOK_FORWARD_URL'),
@@ -146,20 +151,6 @@ return [
             static fn (string $id) => trim($id),
             explode(',', (string) env('PARROT_SUPPORT_PHONE_NUMBER_IDS', ''))
         ), static fn (string $id) => $id !== '')),
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Pre-screening on cPanel (xanderglobalscholars.com)
-    | Meta webhook stays here; messages + delivery statuses can forward to cPanel.
-    |--------------------------------------------------------------------------
-    */
-    'prescreening' => [
-        'cpanel_url' => env(
-            'XANDER_PRESCREENING_URL',
-            'https://xanderglobalscholars.com/api/prescreening-inbound.php'
-        ),
-        'forward_secret' => env('PRESCREENING_FORWARD_SECRET'),
     ],
 
 'openai' => [
